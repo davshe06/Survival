@@ -23,7 +23,7 @@ GPS works without signal on iPhones and cellular iPads. Wi‑Fi‑only iPads hav
 
 It's a static site with no build step — host this folder anywhere with HTTPS.
 
-- **GitHub Pages**: the workflow in `.github/workflows/pages.yml` deploys on pushes to `main`. Enable it once under *Settings → Pages → Source: GitHub Actions*. (Pages on a private repo needs a paid GitHub plan.)
+- **GitHub Pages** (current setup): *Settings → Pages → Source: Deploy from a branch → `main` / root*. Every push to `main` republishes the site at https://davshe06.github.io/survival/ — no build step or workflow needed. (Pages on a private repo needs a paid GitHub plan.)
 - Or drag this folder into Netlify Drop, Vercel, or Cloudflare Pages.
 
 Local test: `python3 -m http.server 8000` then open http://localhost:8000.
