@@ -301,3 +301,25 @@ body.is-map main { padding: 0; }
 .navrow { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
 .navrow > span { flex: 1; min-width: 0; }
 .btn.navend { min-height: 34px; padding: 0 10px; font-size: .85rem; flex: none; }
+
+/* Species photos */
+figure.photo { margin: 8px 0 4px; }
+figure.photo img { width: 100%; max-width: 480px; border-radius: 10px; display: block; background: var(--card2); aspect-ratio: 4 / 3; object-fit: cover; }
+figure.photo figcaption { font-size: .72rem; color: var(--muted); margin-top: 3px; }
+.photos2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.photos2 figure.photo img { aspect-ratio: 1; }
+/* Emergency info card */
+.ice { border: 3px solid var(--danger); border-radius: var(--radius); overflow: hidden; background: var(--card); }
+.icehead { background: var(--danger); color: #fff; font-weight: 800; letter-spacing: .06em; padding: 10px 14px; }
+.icebody { padding: 14px; font-size: 1.05rem; }
+@media print {
+  .tabbar, .topbar, .btnrow, .box.info, .search { display: none !important; }
+  .card, .ice { box-shadow: none; border-color: #999; break-inside: avoid; }
+  textarea.inp { border: 1px solid #999; height: auto; }
+}
+/* knot diagrams */
+.knotsteps { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin: 10px 0 14px; }
+.knotfig { margin: 0; background: var(--card2); --kbg: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 6px 8px 8px; color: var(--muted); }
+.knotsvg { width: 100%; height: auto; display: block; max-width: 420px; margin: 0 auto; }
+.knotfig figcaption { font-size: .8rem; line-height: 1.35; color: var(--text); margin-top: 4px; }
+@media print { .knotfig { break-inside: avoid; } }
