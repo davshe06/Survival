@@ -30,6 +30,15 @@ def dp(pts, tol):
         if mx > t2 and idx > 0: keep[idx] = True; stack += [(a, idx), (idx, b)]
     return [p for p, k in zip(pts, keep) if k]
 
+def dp_keep(pts, tol, junctions):
+    """Simplify but never drop a vertex that is a road/trail junction (needed for routing)."""
+    forced = [i for i, (x, y) in enumerate(pts) if i == 0 or i == len(pts) - 1 or (round(x * SCALE), round(y * SCALE)) in junctions]
+    out = []
+    for a, b in zip(forced, forced[1:]):
+        seg = dp(pts[a:b + 1], tol)
+        out += seg if not out else seg[1:]
+    return out or pts[:1]
+
 def enc(pts):
     out, px, py = [], 0, 0
     for x, y in pts:
@@ -100,13 +109,20 @@ def process(code, work, outdir):
                     elif m == 'S1200' or d.get('state_rout'): key = ('major', 2, road_label(d)); stats['secondary'] += 1
                     elif m == 'S1500' or (fs and m in ('S1400', 'S1740')): key = ('fs', 1 if fs else 2, nm[:40]); stats['forest/4wd'] += 1
                     elif m in ('S1400', 'S1740'): key = ('local', 1 if m == 'S1400' else 2, nm[:40]); stats['local'] += 1
+                    elif m == 'S1630': key = ('major', 3, ''); stats['ramp'] += 1  # on/off ramps: interstates only connect through these
                     else: continue  # ramps, service drives, walkways, etc.
                 for p in parts(sr.shape): groups[key].append([(x, y) for x, y in p])
     tol = {'major': 0.00012, 'fs': 0.00006, 'trails': 0.00004, 'local': 0.00008}
+    # junctions: points where 3+ segment ends meet (TIGER splits roads at every intersection)
+    ends = collections.Counter()
+    for lines in groups.values():
+        for l in lines:
+            for x, y in (l[0], l[-1]): ends[(round(x * SCALE), round(y * SCALE))] += 1
+    junctions = {k for k, c in ends.items() if c >= 3}
     out = {'major': [], 'fs': [], 'trails': [], 'local': []}
     for (layer, cls, lab), lines in groups.items():
         for l in chain(lines):
-            s = dp(l, tol[layer])
+            s = dp_keep(l, tol[layer], junctions)
             if len(s) > 1: out[layer].append([cls, lab, enc(s)])
     with open(os.path.join(outdir, code + '.json'), 'w') as fh: json.dump(out, fh, separators=(',', ':'))
     subprocess.run(['rm', '-rf', ex, z])
