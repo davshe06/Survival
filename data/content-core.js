@@ -106,6 +106,7 @@ You can survive about <b>3 minutes</b> without air (or with severe bleeding) · 
     { id: 'finding', title: 'Finding water in the Southeast', sum: 'Rain, springs, streams, plants, and hidden sources at home', tags: ['find water', 'spring', 'rain', 'transpiration', 'water heater'], body: `
 <h2>Hidden water at home or in buildings</h2>
 <ul><li><b>Water heater:</b> 30–80 gallons. Turn off power/gas first, open the drain valve at the bottom (open a hot faucet to let air in). First water may have sediment — let it settle.</li><li><b>Toilet tank</b> (not bowl) — fine if no chemical cleaner was used; still purify.</li><li>Pipes: open the highest faucet, then drain from the lowest.</li><li>Ice cubes, canned vegetables/fruit juice, pool water (for washing, or treat — chlorine doesn't remove chemicals; not for drinking long‑term).</li></ul>
+<div class="box info"><b class="lbl">Use the map</b>Turn on the <b>💧 Water</b> filter on the <a href="#/map">Map</a> to see thousands of named springs, waterfalls, lakes and ponds, and tap <b>Nearest water</b> for distance and direction to the closest ones.</div>
 <h2>In the field</h2>
 <ul>
 <li>The Southeast is wet — most of the time water is abundant but <b>contaminated</b> (agricultural runoff, livestock, septic, Giardia, E. coli). Always purify.</li>

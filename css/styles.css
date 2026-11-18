@@ -281,3 +281,17 @@ body.is-map main { padding: 0; }
 .mcomp:not(.big) .cdeg { display: none; }
 .mcomp:not(.big) #cDeg { font-size: 44px; }
 .mcomp .ctop text { paint-order: stroke; stroke: var(--card); stroke-width: 4px; }
+
+/* Map filter overlay chips */
+.mchips {
+  position: absolute; z-index: 12; top: calc(10px + var(--safe-top)); left: 64px; right: 64px;
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding: 2px;
+}
+.mchips::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; height: 36px; padding: 0 12px; border-radius: 18px; border: 1px solid var(--line); cursor: pointer; white-space: nowrap;
+  background: color-mix(in srgb, var(--card) 92%, transparent); color: var(--text); font-size: .85rem; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+}
+.chip.on { background: var(--accent); border-color: var(--accent); color: #17130a; }
+:root[data-theme="red"] .chip.on { color: #000; }
+:root[data-theme="light"] .chip.on { color: #fff; }
