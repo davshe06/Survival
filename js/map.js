@@ -550,21 +550,23 @@
   function drawPlaces(vb) {
     if (!LAYERS.places) return []; ensurePlaces(); if (!PLACES) return [];
     if (PLACES._rv !== window.FG.repeatersVer) { PLACES._rv = window.FG.repeatersVer; addRepeaterPlaces(); PLACES._rv = window.FG.repeatersVer; }
-    const z = S.z, out = [];
+    const z = S.z, out = [], cell = z < 8 ? 36 : z < 11 ? 24 : 0, used = new Set(); // declutter when zoomed out
     for (const p of PLACES) {
       if (p.X < vb[0] || p.X > vb[2] || p.Y < vb[1] || p.Y > vb[3]) continue;
       if (z < 9 && p.t !== 'h') continue; if (z < 10.5 && 'ctvx'.includes(p.t)) continue;
       const [x, y] = toScreen(p.X, p.Y), [ch, col] = PL_ICON[p.t], r = p.t === 'h' ? 9 : 7.5;
+      if (cell) { const key = Math.floor(x / cell) + ',' + Math.floor(y / cell); if (used.has(key)) continue; used.add(key); }
       ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - r, y - r, r * 2, r * 2, 3) : ctx.rect(x - r, y - r, r * 2, r * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff'; ctx.stroke();
       ctx.fillStyle = '#fff'; ctx.font = '700 ' + (r * 1.3) + 'px ' + colors.font; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ch, x, y + 0.5); ctx.textAlign = 'left';
       out.push([p, x, y]);
     }
-    return out;
+    placesDrawn = out; return out;
   }
   function drawPlaceLabels(list) { if (S.z < 12) return; for (const [p, x, y] of list) label(p.n, x, y + 15, { size: 10.5, color: PL_ICON[p.t][1], weight: '600' }); }
+  let placesDrawn = [];
   function hitPlace(x, y) {
-    if (!LAYERS.places || !PLACES) return null; let best = null, bd = 16; const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H);
-    for (const p of PLACES) { if (p.X < x0 || p.X > x1 || p.Y < y0 || p.Y > y1) continue; const [sx, sy] = toScreen(p.X, p.Y); const d = Math.hypot(sx - x, sy - y); if (d < bd) { bd = d; best = p; } }
+    if (!LAYERS.places || !PLACES) return null; let best = null, bd = 16;
+    for (const [p] of placesDrawn) { const [sx, sy] = toScreen(p.X, p.Y); const d = Math.hypot(sx - x, sy - y); if (d < bd) { bd = d; best = p; } }
     return best;
   }
   function showPlace(p) {

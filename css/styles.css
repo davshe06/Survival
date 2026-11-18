@@ -317,3 +317,9 @@ figure.photo figcaption { font-size: .72rem; color: var(--muted); margin-top: 3p
   .card, .ice { box-shadow: none; border-color: #999; break-inside: avoid; }
   textarea.inp { border: 1px solid #999; height: auto; }
 }
+/* knot diagrams */
+.knotsteps { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin: 10px 0 14px; }
+.knotfig { margin: 0; background: var(--card2); --kbg: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 6px 8px 8px; color: var(--muted); }
+.knotsvg { width: 100%; height: auto; display: block; max-width: 420px; margin: 0 auto; }
+.knotfig figcaption { font-size: .8rem; line-height: 1.35; color: var(--text); margin-top: 4px; }
+@media print { .knotfig { break-inside: avoid; } }
