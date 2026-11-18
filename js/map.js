@@ -80,7 +80,7 @@
       <div class="mapwrap">
         <canvas id="map"></canvas>
         <div class="mapui tl"><button class="iconbtn" id="mSearch" title="Find a place">🔍</button><button class="iconbtn" id="mLayers" title="Layers & offline maps">🗂️</button></div>
-        <div class="mapui tr"><a class="iconbtn" href="#/" title="Close map">✕</a><button class="iconbtn" id="mWps" title="Waypoints">📌</button><button class="iconbtn ${recording ? 'on' : ''}" id="mRec" title="Record track">⏺</button></div>
+        <div class="mapui tr"><a class="iconbtn" href="#/" title="Close map">✕</a><button class="iconbtn" id="mWps" title="Waypoints">📌</button><button class="iconbtn" id="mCar" title="My car — park here / back to car">🚗</button><button class="iconbtn ${recording ? 'on' : ''}" id="mRec" title="Record track">⏺</button></div>
         <div class="mapui br"><button class="iconbtn" id="mZin" title="Zoom in">＋</button><button class="iconbtn" id="mZout" title="Zoom out">－</button><button class="iconbtn ${follow ? 'on' : ''}" id="mLoc" title="Center on my GPS location">◎</button></div>
         ${chipsHTML()}
         <div class="scale" id="mScale"></div>
@@ -103,7 +103,8 @@
       store.set('mapfollow', follow); $('#mLoc').classList.toggle('on', follow); dirty = true;
     };
     bindChips();
-    $('#mRec').onclick = toggleRec;
+    $('#mRec').onclick = toggleRec; $('#mCar').onclick = carSheet;
+    if (q.get('car')) setTimeout(carSheet, 300);
     $('#mWps').onclick = showWaypoints;
     $('#mLayers').onclick = showLayers;
     $('#mSearch').onclick = showSearch;
@@ -941,6 +942,25 @@
     const ns = $('#navSteps'); if (ns) ns.onclick = e => { e.preventDefault(); showRouteSummary(false); };
   }
   function trackLen(t) { let s = 0; for (let i = 1; i < t.length; i++) s += Geo.dist({ lat: t[i - 1][0], lon: t[i - 1][1] }, { lat: t[i][0], lon: t[i][1] }); return s; }
+
+  // ---------- my car: park here / back to car ----------
+  function carSheet() {
+    const u = window.FG.units(), car = store.get('waypoints', []).find(w => w.car);
+    openSheet(`<h3 style="margin:0 0 6px">🚗 My car</h3>${car ? `<p>${pos ? `<b>${Geo.fmtDist(Geo.dist(pos, car), u)}</b> away · ${Math.round(Geo.bearing(pos, car))}° ${Geo.cardinal(Geo.bearing(pos, car))}` : 'Waiting for a GPS fix…'}<br><span class="small muted">Parked ${new Date(car.t).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span></p>` : '<p class="small muted">Save where you parked before you walk away. One tap guides you back later, with no cell signal needed.</p>'}
+      ${car ? '' : `<label class="small" style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="carRec" ${recording ? 'checked disabled' : 'checked'}> Also record my trail (⏺) so I can back‑track the exact way</label>`}
+      <div class="btnrow">${car ? '<button class="btn pri" id="carGo">Back to car</button><button class="btn" id="carShow">Show on map</button>' : ''}<button class="btn ${car ? '' : 'pri'}" id="carHere">${car ? 'Move pin here' : '🅿️ Park here'}</button>${car ? '<button class="btn" id="carDel">Clear</button>' : ''}</div>`);
+    const set = () => {
+      if (!pos) return toast('Waiting for GPS — step outside for a clear view of the sky');
+      const w = store.get('waypoints', []).filter(x => !x.car); w.push({ id: Date.now(), car: true, name: 'My car', icon: '🚗', lat: pos.lat, lon: pos.lon, t: Date.now() });
+      store.set('waypoints', w); const r = $('#carRec'); if (r && r.checked && !recording) toggleRec(); toast('Car location saved'); closeSheet(); dirty = true;
+    };
+    $('#carHere').onclick = () => { if (car && !confirm('Move the car pin to where you are now?')) return; set(); };
+    if (car) {
+      $('#carGo').onclick = () => { closeSheet(); chooseNav({ lat: car.lat, lon: car.lon, name: 'My car' }); };
+      $('#carShow').onclick = () => { S.lat = car.lat; S.lon = car.lon; S.z = Math.max(S.z, 15); follow = false; closeSheet(); dirty = true; };
+      $('#carDel').onclick = () => { store.set('waypoints', store.get('waypoints', []).filter(x => !x.car)); toast('Car pin cleared'); closeSheet(); dirty = true; };
+    }
+  }
 
   function toggleRec() {
     if (!recording) {

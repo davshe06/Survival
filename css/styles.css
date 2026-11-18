@@ -323,3 +323,29 @@ figure.photo figcaption { font-size: .72rem; color: var(--muted); margin-top: 3p
 .knotsvg { width: 100%; height: auto; display: block; max-width: 420px; margin: 0 auto; }
 .knotfig figcaption { font-size: .8rem; line-height: 1.35; color: var(--text); margin-top: 4px; }
 @media print { .knotfig { break-inside: avoid; } }
+.box.ok { background: var(--ok-bg); border-color: var(--accent2); }
+/* first-aid flowcharts */
+.flowbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.flowbtns .btn { min-height: 64px; font-size: 1.25rem; justify-content: center; }
+/* Spanish phrase full-screen card */
+.phrasefull { position: fixed; inset: 0; z-index: 60; background: var(--bg); display: flex; flex-direction: column; justify-content: center; padding: 24px calc(20px + var(--safe-bottom)) 24px; text-align: center; gap: 14px; }
+.phrasefull .es { font-size: clamp(2rem, 9vw, 4rem); font-weight: 800; line-height: 1.15; color: var(--text); }
+.phrasefull .pr { font-size: 1.1rem; font-style: italic; color: var(--accent); }
+.phrasefull .en { font-size: 1rem; color: var(--muted); }
+/* printable binder */
+.binder-cover { border: 2px solid var(--line); border-radius: 12px; padding: 14px; margin: 10px 0; }
+.binder-sec h1 { font-size: 1.4rem; margin: 22px 0 8px; }
+.binder-art h2 { font-size: 1.15rem; margin: 16px 0 6px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.binder .fq { border-left: 3px solid var(--line); padding-left: 10px; margin: 6px 0; }
+.binder .fa { margin: 4px 0 4px 8px; }
+@media print {
+  .noprint { display: none !important; }
+  .binder-sec { break-before: page; }
+  .binder-art { break-inside: auto; }
+  .binder-art h2, .binder-sec h1 { break-after: avoid; }
+  .binder figure, .binder img, .binder .knotfig, .binder table { break-inside: avoid; }
+  .binder img { max-height: 2.4in; width: auto; }
+  .binder { color: #000; font-size: 11pt; }
+}
+.knotsvg.trk { max-height: 150px; width: auto; max-width: 100%; margin: 6px auto; }
+@media print { .toast, .strobe, .phrasefull { display: none !important; } }
