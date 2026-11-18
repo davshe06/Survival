@@ -77,6 +77,10 @@
       <div class="btnrow"><a class="btn" href="#/ice?edit=1">✏️ Edit</a><a class="btn" href="#/tools/share">📲 Text my location</a><button class="btn" onclick="window.print()">🖨️ Print</button></div>`;
   });
 
+  // printable versions for the field binder
+  window.FG.iceHTML = () => { const ice = store.get('ice', {}); if (!ice.name && !ice.allergies && !(ice.contacts || []).some(c => c.phone)) return ''; return `<section class="binder-sec"><div class="ice"><div class="icehead">⚕️ EMERGENCY INFORMATION</div><div class="icebody"><div class="big">${esc(ice.name || '')}</div>${ice.dob ? `<div>Born ${esc(ice.dob)}</div>` : ''}<dl class="kv" style="margin-top:10px">${ICE_FIELDS.slice(2).filter(([k]) => ice[k]).map(([k, l]) => `<dt>${l}</dt><dd style="white-space:pre-wrap"><b>${esc(ice[k])}</b></dd>`).join('')}${(ice.contacts || []).filter(c => c.phone).map(c => `<dt>Contact${c.rel ? ' (' + esc(c.rel) + ')' : ''}</dt><dd><b>${esc(c.name || '')} ${esc(c.phone)}</b></dd>`).join('')}</dl></div></div></section>`; };
+  window.FG.planHTML = () => { const p = store.get('plan', {}); const rows = PLAN.filter(([k]) => (p[k] || '').trim()); return rows.length ? `<section class="binder-sec"><h1>👪 Family emergency plan</h1><dl class="kv">${rows.map(([k, l]) => `<dt>${esc(l)}</dt><dd style="white-space:pre-wrap">${esc(p[k])}${p[k + '_ll'] ? `<br><span class="small">GPS ${p[k + '_ll'][0].toFixed(5)}, ${p[k + '_ll'][1].toFixed(5)}</span>` : ''}</dd>`).join('')}</dl></section>` : ''; };
+
   // ======================= Supplies tracker =======================
   const SUP_PRESETS = [['💧 Water (gallons)', 'Water', 'gal', 6], ['🥫 Canned food', 'Food', 'cans', 24], ['🍫 Food bars', 'Food', 'bars', 12], ['💊 Prescription meds', 'Medical', 'days', 0], ['🩹 First aid kit', 'Medical', 'kit', 6], ['🔋 Batteries', 'Power', 'pack', 60], ['🧴 Bleach', 'Water', 'bottle', 12], ['⛽ Gas (stabilized)', 'Fuel', 'gal', 12], ['🔥 Propane', 'Fuel', 'tank', 0], ['🧯 Fire extinguisher', 'Safety', 'unit', 60], ['🐕 Pet food', 'Pets', 'bag', 12], ['🍼 Baby supplies', 'Family', 'pack', 12]];
   const daysTo = d => d ? Math.floor((new Date(d + 'T12:00') - new Date()) / 864e5) : null;

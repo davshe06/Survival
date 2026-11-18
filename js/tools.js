@@ -17,13 +17,14 @@
     { id: 'dutch', icon: '🍲', title: 'Dutch oven coals', sum: 'Briquettes on top & bottom for any temp', k: 'dutch oven charcoal briquettes coals temperature baking' },
     { id: 'planting', icon: '🌱', title: 'Planting calendar', sum: 'When to plant each crop from your frost date', k: 'planting calendar garden frost date seeds when to plant southeast' },
     { id: 'battery', icon: '🔋', title: 'Power / solar calculator', sum: 'Battery runtime, solar panel & inverter sizing', k: 'battery solar watt amp hour inverter runtime power generator' },
-    { id: 'timer', icon: '⏱️', title: 'Timers', sum: 'Boil timer, tourniquet time log, stopwatch', k: 'timer stopwatch boil tourniquet time' }
+    { id: 'timer', icon: '⏱️', title: 'Timers', sum: 'Boil timer, tourniquet time log, stopwatch', k: 'timer stopwatch boil tourniquet time' },
+    { id: 'lightning', icon: '⚡', title: 'Lightning distance', sum: 'Flash‑to‑bang counter and 30‑minute all‑clear timer', k: 'lightning thunder storm distance flash bang 30 30 rule' }
   ];
   TOOL_LIST.push(...TOOLS);
 
   route(/^\/tools$/, () => {
     setTitle('Tools');
-    view.innerHTML = `<div class="list">${TOOLS.map(t => `<a class="row" href="#/tools/${t.id}"><span class="i">${t.icon}</span><span class="t"><b>${esc(t.title)}</b><small>${esc(t.sum)}</small></span><span class="chev">›</span></a>`).join('')}</div>`;
+    view.innerHTML = `<div class="list">${TOOL_LIST.map(t => `<a class="row" href="${t.href || "#/tools/" + t.id}"><span class="i">${t.icon}</span><span class="t"><b>${esc(t.title)}</b><small>${esc(t.sum)}</small></span><span class="chev">›</span></a>`).join('')}</div>`;
   });
   function tool(id, fn) { route(new RegExp('^/tools/' + id + '$'), (m, q) => { const t = TOOLS.find(x => x.id === id); setTitle(t.title, '#/tools'); return fn(q); }); }
 
@@ -200,15 +201,31 @@
       const s = Geo.sunTimes(date, p.lat, p.lon), m = Geo.moon(date); const now = new Date();
       const T = x => x ? x.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—';
       let left = ''; if (s.sunset && now.toDateString() === date.toDateString()) { const ms = s.sunset - now; left = ms > 0 ? `<p class="big">${Math.floor(ms / 36e5)}h ${Math.floor(ms % 36e5 / 6e4)}m of daylight left</p>` : '<p class="big">The sun has set</p>'; }
-      $('#out').innerHTML = `<div class="card"><h3>☀️ Sun</h3>${left}<dl class="kv">
-        <dt>First light (civil dawn)</dt><dd>${T(s.dawn)}</dd><dt>Sunrise</dt><dd>${T(s.sunrise)}</dd><dt>Solar noon</dt><dd>${T(s.noon)} — shadows point true north</dd><dt>Sunset</dt><dd>${T(s.sunset)}</dd><dt>Last light (civil dusk)</dt><dd>${T(s.dusk)}</dd><dt>Full dark (nautical)</dt><dd>${T(s.nauticalDusk)}</dd><dt>Day length</dt><dd>${s.dayLen ? Math.floor(s.dayLen) + 'h ' + Math.round(s.dayLen % 1 * 60) + 'm' : '—'}</dd></dl>
+      const doy = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 864e5), dec = 23.44 * Math.sin(2 * Math.PI * (284 + doy) / 365) * Math.PI / 180;
+      const azR = Math.acos(Math.max(-1, Math.min(1, Math.sin(dec) / Math.cos(p.lat * Math.PI / 180)))) * 180 / Math.PI; // sunrise azimuth from true north
+      const camp = s.sunset ? new Date(+s.sunset - 36e5) : null;
+      $('#out').innerHTML = `<div class="card"><h3>☀️ Sun</h3>${left}${camp && now < s.sunset && now.toDateString() === date.toDateString() ? `<p>⛺ Be at camp with shelter up by <b>${T(camp)}</b> (1 hour before sunset). <button class="btn" id="sunAlarm" style="min-height:34px">🔔 Alert me</button></p>` : ''}<dl class="kv">
+        <dt>First light (civil dawn)</dt><dd>${T(s.dawn)}</dd><dt>Sunrise</dt><dd>${T(s.sunrise)}</dd><dt>Solar noon</dt><dd>${T(s.noon)} — shadows point true north</dd><dt>Sunset</dt><dd>${T(s.sunset)}</dd><dt>Last light (civil dusk)</dt><dd>${T(s.dusk)}</dd><dt>Full dark (nautical)</dt><dd>${T(s.nauticalDusk)}</dd><dt>Day length</dt><dd>${s.dayLen ? Math.floor(s.dayLen) + 'h ' + Math.round(s.dayLen % 1 * 60) + 'm' : '—'}</dd>
+        <dt>Sun rises toward</dt><dd>${Math.round(azR)}° ${Geo.cardinal(azR)} (true)</dd><dt>Sun sets toward</dt><dd>${Math.round(360 - azR)}° ${Geo.cardinal(360 - azR)} (true)</dd></dl>
+        <p class="small muted">Sunrise and sunset directions are a no‑compass check: the sun rises due east and sets due west only around the March and September equinoxes.</p>
         <p class="small muted">Times shown in this device’s time zone.</p></div>
         <div class="card"><h3>${m.icon} Moon</h3><dl class="kv"><dt>Phase</dt><dd>${m.name}</dd><dt>Illuminated</dt><dd>${Math.round(m.illum * 100)}%</dd><dt>Age</dt><dd>${m.age.toFixed(1)} days</dd><dt>Next full moon</dt><dd>${m.nextFull.toLocaleDateString()}</dd><dt>Next new moon</dt><dd>${m.nextNew.toLocaleDateString()}</dd></dl>
         <p class="small muted">Full moon = good natural light for night travel. New moon = darkest nights, best for seeing (and hiding) lights.</p></div>`;
     }
+    let alarmT = null;
+    view.addEventListener('click', e => {
+      if (e.target.id !== 'sunAlarm') return;
+      const p = Geo.parse($('#loc').value), s = Geo.sunTimes(new Date(), p.lat, p.lon); if (!s.sunset) return;
+      const mins = +(prompt('Alert me how many minutes before sunset?', '60') || 0); if (!mins) return;
+      const ms = +s.sunset - mins * 6e4 - Date.now(); if (ms <= 0) return toast('That time has already passed');
+      window.FG.audioUnlock(); clearTimeout(alarmT);
+      alarmT = setTimeout(() => { [0, .35, .7].forEach(t => window.FG.tone(880, 250, .9, 'square', t)); if (navigator.vibrate) navigator.vibrate([400, 200, 400]); alert('🌅 ' + mins + ' minutes until sunset'); }, ms);
+      toast('Alert set for ' + new Date(Date.now() + ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + ' — keep the app open');
+    });
     $('#dt').onchange = calc; $('#loc').oninput = calc;
     $('#gps').onclick = () => navigator.geolocation && navigator.geolocation.getCurrentPosition(p => { $('#loc').value = p.coords.latitude.toFixed(4) + ', ' + p.coords.longitude.toFixed(4); store.set('lastpos', { lat: p.coords.latitude, lon: p.coords.longitude }); calc(); }, e => toast(gpsErrText(e)), { enableHighAccuracy: false, timeout: 30000 });
     calc();
+    return () => clearTimeout(alarmT);
   });
 
   // ---------- Water ----------
@@ -248,12 +265,26 @@
         <div class="btnrow"><button class="btn red" data-m="sos">SOS (… — — — …)</button><button class="btn" data-m="strobe">Strobe</button><button class="btn" data-m="steady">Steady white light</button></div></div>
       <div class="card"><h3>Morse code flasher</h3><input class="inp" id="mt" placeholder="Message, e.g. HELP 2 INJURED" autocapitalize="characters">
         <p class="mono small" id="mc"></p><div class="btnrow"><button class="btn pri" id="mgo">Flash message</button><label class="small" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="snd"> with sound</label></div></div>
+      <div class="card"><h3>Decode Morse</h3><p class="small muted">Write what you see or hear: dots and dashes (. or •, - or —), a space between letters, / between words.</p>
+        <input class="inp mono" id="md" placeholder="... --- ..." autocapitalize="off" autocorrect="off"><p class="big" id="mdo" style="margin-top:8px"></p></div>
+      <div class="card"><h3>Emergency whistle</h3><p class="small muted">A loud, high‑pitched distress call: three blasts, pause, repeat. Turn the volume all the way up. A real whistle carries farther and never needs a battery.</p>
+        <div class="btnrow"><button class="btn red" id="wh">📣 Whistle ×3 (repeat)</button></div></div>
       <div class="card"><h3>Morse alphabet</h3><div class="mono small" style="columns:3;column-gap:16px">${Object.entries(MORSE).map(([k, v]) => `<div><b>${k}</b> ${v.replace(/\./g, '•').replace(/-/g, '—')}</div>`).join('')}</div></div>
       <div class="box info"><b class="lbl">Signal rules of three</b>Three of anything = distress: 3 whistle blasts, 3 fires in a triangle, 3 gunshots, 3 flashes. Repeat every few minutes. <a href="#/a/signal/signals">Signaling guide ›</a></div>`;
     $('#mt').oninput = () => { $('#mc').textContent = toMorse($('#mt').value); };
+    const DEC = Object.fromEntries(Object.entries(MORSE).map(([k, v]) => [v, k]));
+    $('#md').oninput = () => { $('#mdo').textContent = $('#md').value.replace(/[•·]/g, '.').replace(/[—–_]/g, '-').trim().split(/\s*\/\s*|\s{3,}/).map(w => w.split(/\s+/).map(c => c ? (DEC[c] || '?') : '').join('')).join(' '); };
+    $('#wh').onclick = () => { audioUnlock(); runWhistle(); };
     view.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { audioUnlock(); runSignal(b.dataset.m); });
     $('#mgo').onclick = () => { audioUnlock(); const t = $('#mt').value.trim(); if (!t) return toast('Type a message'); runSignal('msg', t, $('#snd').checked); };
   });
+  function runWhistle() {
+    const el = document.createElement('div'); el.className = 'strobe'; el.innerHTML = '<button class="btn red" style="font-size:1.1rem">✕ Stop whistle</button>'; document.body.appendChild(el);
+    let stopped = false, t = null;
+    const cycle = () => { if (stopped) return; [0, .9, 1.8].forEach(a => { tone(3150, 650, 1, 'square', a); tone(3300, 650, .6, 'sawtooth', a); }); el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 2500); t = setTimeout(cycle, 6000); };
+    el.querySelector('button').onclick = () => { stopped = true; clearTimeout(t); el.remove(); };
+    cycle();
+  }
   function toMorse(t) { return t.toUpperCase().split('').map(c => c === ' ' ? '/' : (MORSE[c] || '')).join(' '); }
   // ---------- shared sound (works on iPhone) ----------
   // iOS only allows sound after a tap, and Web Audio is muted by the ring/silent switch unless the page
@@ -401,6 +432,8 @@
         <dt>As MRE/freeze‑dried</dt><dd>≈ ${Math.ceil(kcal / 1200)} MREs or ${Math.ceil(kcal / 400)} 1‑cup servings</dd>
         <dt>As peanut butter</dt><dd>≈ ${Math.ceil(kcal / 2650)} 16‑oz jars (calorie dense!)</dd>
         <dt>Bleach to treat water</dt><dd>≈ ${Math.ceil(total * 8 / 100 * 5)} mL of 6% bleach</dd></dl>
+        ${(() => { const sup = store.get('supplies', []), gal = sup.filter(x => /^gal/i.test(x.u || '') && (x.c === 'Water' || /water/i.test(x.n))).reduce((t, x) => t + (parseFloat(x.q) || 0), 0), perDay = total / Math.max(1, d);
+          return sup.length ? `<div class="box ${gal >= total ? 'ok' : 'warn'}" style="margin:8px 0">💧 Your <a href="#/supplies">supplies list</a> has <b>${Math.round(gal * 10) / 10} gal</b> of water: enough for about <b>${perDay ? Math.floor(gal / perDay) : 0} day(s)</b> for this group${gal < total ? ` (${Math.ceil(total - gal)} gal short of ${d} days)` : ''}.</div>` : ''; })()}
         <p class="small muted">A car can realistically carry 10–20 gallons. Beyond that, carry purification (filter + bleach) and plan around water sources.</p></div>`;
     }
     view.querySelectorAll('input,select').forEach(i => i.oninput = calc); calc();
@@ -456,6 +489,7 @@
       <label class="f">…or pick a region</label><select class="inp" id="rg"><option value="">Choose…</option>
       <option value="02-01|12-15">South Florida (frost rare) — zone 10</option><option value="02-15|12-05">Central FL / Gulf coast — zone 9</option><option value="03-10|11-20">S. GA, S. AL, S. MS, LA, coastal SC — zone 8b</option>
       <option value="03-25|11-05">Atlanta, Birmingham, Columbia, Raleigh — zone 8a/7b</option><option value="04-10|10-25">Nashville, Charlotte foothills, N. GA/AL, AR — zone 7a/7b</option><option value="04-25|10-15">Appalachian mountains, KY, WV, N. VA — zone 6</option></select>
+      <div class="btnrow"><button class="btn" id="frGps">📍 Estimate from my GPS</button></div><p class="small" id="frMsg"></p>
       <p class="small muted">Dates are averages — local frost dates vary with elevation. Ask any farm‑supply store or extension office.</p></div><div id="po"></div>`;
     const y = new Date().getFullYear();
     $('#rg').onchange = () => { const v = $('#rg').value; if (!v) return; const [a, b] = v.split('|'); $('#sp').value = y + '-' + a; $('#fa').value = y + '-' + b; calc(); };
@@ -471,6 +505,21 @@
         return `<tr><td><b>${n}</b>${now(spr) || now(fal) ? ' <span class="pri-badge pri-1" style="background:var(--accent2)">plant now</span>' : ''}<br><span class="small muted">${note}</span></td><td>${spr ? fmt(spr[0]) + '–' + fmt(spr[1]) : '—'}</td><td>${fal ? fmt(fal[0]) + '–' + fmt(fal[1]) : '—'}</td><td>${days}</td></tr>`;
       }).join('')}</table></div><p><a href="#/c/garden">Gardening guide ›</a></p>`;
     }
+    $('#frGps').onclick = () => {
+      if (!navigator.geolocation) return toast('No GPS on this device');
+      $('#frMsg').textContent = 'Getting your position…';
+      navigator.geolocation.getCurrentPosition(p => {
+        const lat = p.coords.latitude, altFt = p.coords.altitude != null ? p.coords.altitude * 3.281 : null;
+        // average dates for the Southeast at sea level by latitude, then ~10 days later (spring) / earlier (fall) per 1,000 ft
+        const L = [[25, 15, 365], [27, 35, 360], [28, 41, 354], [30, 56, 335], [32, 74, 319], [34, 89, 309], [36, 100, 299], [38, 110, 289], [40, 118, 282]];
+        let i = 0; while (i < L.length - 2 && lat > L[i + 1][0]) i++;
+        const f = Math.max(0, Math.min(1, (lat - L[i][0]) / (L[i + 1][0] - L[i][0]))), sp = L[i][1] + f * (L[i + 1][1] - L[i][1]), fa = L[i][2] + f * (L[i + 1][2] - L[i][2]), adj = altFt ? altFt / 100 : 0;
+        const d = n => { const x = new Date(y, 0, 1); x.setDate(Math.round(n)); return x.toISOString().slice(0, 10); };
+        if (lat < 26) { $('#sp').value = y + '-01-15'; $('#fa').value = y + '-12-31'; } else { $('#sp').value = d(sp + adj); $('#fa').value = d(fa - adj); }
+        $('#frMsg').textContent = `Estimated for ${lat.toFixed(2)}°N${altFt ? ' at ' + Math.round(altFt).toLocaleString() + ' ft' : ' (no altitude reading, so assumed near sea level)'}. Valleys and low spots frost later in spring and earlier in fall than this.`;
+        calc();
+      }, e => { $('#frMsg').textContent = gpsErrText(e); }, { enableHighAccuracy: true, timeout: 30000 });
+    };
     $('#sp').onchange = calc; $('#fa').onchange = calc; calc();
   });
 
@@ -483,6 +532,11 @@
       <label class="f">Through an inverter (AC)?</label><select class="inp" id="inv"><option value="1">No — DC / USB</option><option value="0.85">Yes — AC inverter (~85% efficient)</option></select>
       <p class="big" id="rt" style="margin-top:12px"></p></div>
       <div class="card"><h3>Solar to recharge it</h3><label class="f">Peak sun hours / day</label><select class="inp" id="psh"><option value="5">Southeast summer (≈5)</option><option value="4" selected>Spring/fall (≈4)</option><option value="3">Winter or cloudy (≈3)</option></select><p id="sol"></p></div>
+      <div class="card"><h3>Generator fuel runtime</h3>
+        <div class="two"><div><label class="f">Generator rating (running W)</label><input class="inp" id="gr" inputmode="numeric" value="3500"></div><div><label class="f">Your load (W)</label><input class="inp" id="gl" inputmode="numeric" value="1200"></div>
+        <div><label class="f">Fuel on hand (gal)</label><input class="inp" id="gf" inputmode="decimal" value="10"></div><div><label class="f">Fuel</label><select class="inp" id="gt"><option value="gas">Gasoline</option><option value="lp">Propane (gal; 20‑lb tank ≈ 4.7)</option></select></div></div>
+        <p id="go" style="margin-top:10px"></p>
+        <p class="small muted">⚠️ Run generators outdoors only, 20+ ft from doors and windows. Carbon monoxide kills fast. Motors and fridges briefly draw 2–3× their running watts when they start.</p></div>
       <div class="card"><h3>Typical loads</h3><div class="tbl"><table><tr><th>Device</th><th>Watts</th></tr>
       ${[['Phone charging', '5–15'], ['Tablet charging', '10–20'], ['LED lantern', '3–10'], ['12V fan', '10–30'], ['Laptop', '45–90'], ['CPAP (no humidifier)', '30–60'], ['12V compressor fridge (avg)', '15–40'], ['Starlink Mini', '25–40'], ['Ham/GMRS radio (receive / transmit)', '5 / 50+'], ['Full‑size fridge (avg)', '100–200'], ['Microwave', '1,000–1,500'], ['Coffee maker / hair dryer', '800–1,800'], ['Window AC', '500–1,500'], ['Well pump', '750–2,000 (2–3× surge)']].map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table></div></div>`;
     function calc() {
@@ -492,6 +546,9 @@
       const h = ld ? usable / ld : 0;
       $('#rt').textContent = ld ? `≈ ${h < 1 ? Math.round(h * 60) + ' minutes' : h.toFixed(1) + ' hours'} (${Math.round(usable)} usable Wh)` : '';
       const psh = +$('#psh').value; const need = wh * +$('#bt').value / (psh * 0.75);
+      const gr = +$('#gr').value || 0, gl = Math.min(+$('#gl').value || 0, gr), gf = +$('#gf').value || 0, lp = $('#gt').value === 'lp';
+      if (gr) { const gph = (0.03 * gr / 1000 + 0.11 * gl / 1000) * (lp ? 1.4 : 1), hrs = gf / gph; // fit to manufacturer runtime specs (inverter & open-frame units)
+        $('#go').innerHTML = `${+$('#gl').value > gr ? '⚠️ Load is more than the generator can run. ' : ''}Uses about <b>${gph.toFixed(2)} gal/hr</b> → <b>${hrs < 48 ? hrs.toFixed(1) + ' hours' : (hrs / 24).toFixed(1) + ' days'}</b> continuous on ${gf} gal.<br><span class="small muted">Running 4 hours on / 4 off (fridge stays cold) makes it last twice as long: ${(hrs * 2 / 24).toFixed(1)} days.</span>`; }
       $('#sol').innerHTML = `To refill ${Math.round(wh * +$('#bt').value)} Wh in one day you need about <b>${Math.ceil(need / 10) * 10} W</b> of panels (assuming 75% real‑world efficiency). Use a charge controller between panels and battery (MPPT is best).`;
     }
     view.querySelectorAll('input,select').forEach(i => i.oninput = calc); calc();

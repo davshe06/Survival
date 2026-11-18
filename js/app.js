@@ -66,6 +66,7 @@
     view.innerHTML = `
       <div class="search"><input id="q" type="search" placeholder="Search everything (e.g. snake bite, flat tire, acorns)" autocomplete="off" enterkeyhint="search"></div>
       <div class="sos-strip">
+        <a href="#/triage"><span>🚑</span>First aid steps</a>
         <a href="#/a/firstaid/bleeding"><span>🩸</span>Severe bleeding</a>
         <a href="#/a/firstaid/cpr"><span>❤️</span>CPR</a>
         <a href="#/a/firstaid/choking"><span>😮‍💨</span>Choking</a>
@@ -74,6 +75,7 @@
         <a href="#/c/dogs"><span>🐕</span>Dog first aid</a>
         <a href="#/tools/sos"><span>🔦</span>SOS signal</a>
         <a href="#/tools/share"><span>📲</span>Text my location</a>
+        <a href="#/map?car=1"><span>🚗</span>Back to car</a>
         <a href="#/ice"><span>🆔</span>Emergency info</a>
       </div>
       ${window.FG.suppliesAlert && window.FG.suppliesAlert() ? `<a class="box warn" href="#/supplies" style="display:block;text-decoration:none;color:inherit">⏰ <b>${window.FG.suppliesAlert()} supply item(s)</b> expired or expiring within 30 days — tap to review.</a>` : ''}
@@ -174,7 +176,7 @@
       }
       scored.sort((x, y) => y[0] - x[0]);
       const tools = TOOL_LIST.filter(x => words.every(w => (x.title + ' ' + x.sum + ' ' + x.k).toLowerCase().includes(w)));
-      res.innerHTML = (tools.length ? `<h2 class="section">Tools</h2><div class="list">${tools.map(x => `<a class="row" href="#/tools/${x.id}"><span class="i">${x.icon}</span><span class="t"><b>${esc(x.title)}</b><small>${esc(x.sum)}</small></span><span class="chev">›</span></a>`).join('')}</div>` : '') +
+      res.innerHTML = (tools.length ? `<h2 class="section">Tools</h2><div class="list">${tools.map(x => `<a class="row" href="${x.href || "#/tools/" + x.id}"><span class="i">${x.icon}</span><span class="t"><b>${esc(x.title)}</b><small>${esc(x.sum)}</small></span><span class="chev">›</span></a>`).join('')}</div>` : '') +
         `<h2 class="section">${scored.length} article${scored.length === 1 ? '' : 's'}</h2>` +
         (scored.length ? '<div class="list">' + scored.slice(0, 60).map(([, a]) => {
           const i = a.text.toLowerCase().indexOf(words[0]);
@@ -193,6 +195,10 @@
       <a class="row" href="#/ice"><span class="i">🆔</span><span class="t"><b>Emergency info card</b><small>Allergies, medications, blood type, emergency contacts</small></span><span class="chev">›</span></a>
       <a class="row" href="#/plan"><span class="i">👪</span><span class="t"><b>Family emergency plan</b><small>Meeting places, contacts, evacuation routes — printable</small></span><span class="chev">›</span></a>
       <a class="row" href="#/supplies"><span class="i">⏰</span><span class="t"><b>Supplies & expiration dates</b><small>Water, food, meds, batteries, fuel — with reminders</small></span><span class="chev">›</span></a>
+      <a class="row" href="#/triage"><span class="i">🚑</span><span class="t"><b>First aid step by step</b><small>Yes/no questions that tell you exactly what to do</small></span><span class="chev">›</span></a>
+      <a class="row" href="#/storm"><span class="i">🌀</span><span class="t"><b>Storm checklists</b><small>Hurricane, tornado, flood, ice storm, power outage</small></span><span class="chev">›</span></a>
+      <a class="row" href="#/phrases"><span class="i">🗣️</span><span class="t"><b>Spanish emergency phrases</b><small>Big text to show, with pronunciation and audio</small></span><span class="chev">›</span></a>
+      <a class="row" href="#/binder"><span class="i">🖨️</span><span class="t"><b>Printable field binder</b><small>Print or save a PDF backup of the pages you choose</small></span><span class="chev">›</span></a>
       <a class="row" href="#/notes"><span class="i">📝</span><span class="t"><b>Notes &amp; logs</b><small>Your own notes, medical log, contacts — saved on this device</small></span><span class="chev">›</span></a>
       <a class="row" href="#/favs"><span class="i">★</span><span class="t"><b>Saved articles</b><small>Articles you starred</small></span><span class="chev">›</span></a>
       <a class="row" href="#/settings"><span class="i">⚙️</span><span class="t"><b>Settings &amp; backup</b><small>Display mode, text size, export / import your data</small></span><span class="chev">›</span></a>
