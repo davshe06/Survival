@@ -30,7 +30,7 @@
   // ---------- shared GPS watcher ----------
   function watchGPS(cb, err) {
     if (!navigator.geolocation) { err && err({ message: 'This device has no location support' }); return () => { }; }
-    const id = navigator.geolocation.watchPosition(cb, e => err && err(e), { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+    const id = navigator.geolocation.watchPosition(cb, e => err && err(e), { enableHighAccuracy: true, maximumAge: 0, timeout: 60000 });
     return () => navigator.geolocation.clearWatch(id);
   }
   function gpsErrText(e) {
@@ -251,18 +251,43 @@
       <div class="card"><h3>Morse alphabet</h3><div class="mono small" style="columns:3;column-gap:16px">${Object.entries(MORSE).map(([k, v]) => `<div><b>${k}</b> ${v.replace(/\./g, '•').replace(/-/g, '—')}</div>`).join('')}</div></div>
       <div class="box info"><b class="lbl">Signal rules of three</b>Three of anything = distress: 3 whistle blasts, 3 fires in a triangle, 3 gunshots, 3 flashes. Repeat every few minutes. <a href="#/a/signal/signals">Signaling guide ›</a></div>`;
     $('#mt').oninput = () => { $('#mc').textContent = toMorse($('#mt').value); };
-    view.querySelectorAll('[data-m]').forEach(b => b.onclick = () => runSignal(b.dataset.m));
-    $('#mgo').onclick = () => { const t = $('#mt').value.trim(); if (!t) return toast('Type a message'); runSignal('msg', t, $('#snd').checked); };
+    view.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { audioUnlock(); runSignal(b.dataset.m); });
+    $('#mgo').onclick = () => { audioUnlock(); const t = $('#mt').value.trim(); if (!t) return toast('Type a message'); runSignal('msg', t, $('#snd').checked); };
   });
   function toMorse(t) { return t.toUpperCase().split('').map(c => c === ' ' ? '/' : (MORSE[c] || '')).join(' '); }
-  let audioCtx;
-  function beep(on) {
+  // ---------- shared sound (works on iPhone) ----------
+  // iOS only allows sound after a tap, and Web Audio is muted by the ring/silent switch unless the page
+  // declares itself a "playback" app (iOS 17+), so every Start button calls audioUnlock() first.
+  let audioCtx = null;
+  function audioUnlock() {
     try {
+      if (navigator.audioSession) navigator.audioSession.type = 'playback';
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      if (on) { const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.frequency.value = 750; g.gain.value = .25; o.connect(g); g.connect(audioCtx.destination); o.start(); beep.o = o; }
+      if (audioCtx.state !== 'running') audioCtx.resume();
+      // play one silent sample inside the tap so iOS fully unlocks output
+      const b = audioCtx.createBuffer(1, 1, 22050), src = audioCtx.createBufferSource(); src.buffer = b; src.connect(audioCtx.destination); src.start(0);
+    } catch (e) { }
+    return audioCtx;
+  }
+  function tone(freq, ms, vol = 0.9, type = 'square', at = 0) {
+    const c = audioCtx; if (!c) return;
+    try {
+      if (c.state !== 'running') c.resume();
+      const t = c.currentTime + at, o = c.createOscillator(), g = c.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.005);
+      g.gain.setValueAtTime(vol, t + ms / 1000 - 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
+      o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + ms / 1000 + 0.02);
+    } catch (e) { }
+  }
+  function beep(on) { // continuous tone for Morse/SOS and alarms
+    try {
+      if (!audioCtx) return;
+      if (on) { const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.frequency.value = 750; g.gain.value = .5; o.connect(g); g.connect(audioCtx.destination); o.start(); beep.o = o; }
       else if (beep.o) { beep.o.stop(); beep.o = null; }
     } catch (e) { }
   }
+  window.FG.audioUnlock = audioUnlock; window.FG.tone = tone;
   function runSignal(mode, text, sound) {
     const el = document.createElement('div'); el.className = 'strobe'; el.innerHTML = '<button class="btn red" style="font-size:1.1rem">✕ Stop</button>';
     document.body.appendChild(el);
@@ -293,33 +318,46 @@
 
   // ---------- CPR metronome ----------
   tool('cpr', () => {
+    const st = store.get('cpr', { mode: 'hands', sound: true });
     view.innerHTML = `
-      <div style="text-align:center;margin:10px 0"><div id="beat" style="width:160px;height:160px;border-radius:50%;margin:0 auto;background:var(--card2);border:3px solid var(--danger);display:flex;align-items:center;justify-content:center;font-size:2.4rem;font-weight:800" class="mono">0</div>
+      <div style="text-align:center;margin:10px 0"><div id="beat" style="width:160px;height:160px;border-radius:50%;margin:0 auto;background:var(--card2);border:3px solid var(--danger);display:flex;align-items:center;justify-content:center;font-size:2.4rem;font-weight:800;transition:background .05s" class="mono">0</div>
       <p class="big" id="phase">Ready</p>
-      <div class="btnrow" style="justify-content:center"><button class="btn red" id="go">▶ Start</button><select class="inp" id="mode" style="width:auto"><option value="hands">Hands‑only (no breaths)</option><option value="30">30 compressions : 2 breaths</option></select></div>
+      <div class="btnrow" style="justify-content:center"><button class="btn red" id="go" style="min-width:140px">▶ Start</button>
+        <select class="inp" id="mode" style="width:auto"><option value="hands">Hands‑only (no breaths)</option><option value="30">30 compressions : 2 breaths</option></select></div>
+      <div class="btnrow" style="justify-content:center"><button class="btn ${st.sound ? 'pri' : ''}" id="snd">${st.sound ? '🔊 Beep on' : '🔇 Beep off'}</button><button class="btn" id="test">Test beep</button></div>
       <p class="small muted" id="tm">Elapsed 0:00</p></div>
-      <div class="box danger"><b class="lbl">Adult CPR in brief</b>Call 911 (or send someone). Heel of hand on center of chest, other hand on top. Push <b>hard (2–2.4 in / 5–6 cm)</b> and <b>fast (100–120/min)</b>, let chest fully rise. Don’t stop except to use an AED or when someone takes over. Swap rescuers every 2 min if you can. <a href="#/a/firstaid/cpr">Full CPR guide ›</a></div>`;
-    let run = false, n = 0, t0 = 0, timer = null, tick = null;
-    function click() {
-      try { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.frequency.value = 1000; g.gain.setValueAtTime(.4, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime + .08); o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + .09); } catch (e) { }
-    }
-    let breathPause = 0;
+      <div class="box info"><b class="lbl">Can't hear it?</b>Turn the volume up with the side buttons. On iPhones older than iOS 17, flip the ring/silent switch to ring. The screen also flashes and the phone vibrates (Android) on every beat.</div>
+      <div class="box danger"><b class="lbl">Adult CPR in brief</b>Call 911 (or send someone). Heel of hand on center of chest, other hand on top. Push <b>hard (2–2.4 in / 5–6 cm)</b> and <b>fast (100–120/min)</b> — push down on every beep — and let the chest fully rise. In 30:2 mode, two low tones mean give 2 breaths. Don't stop except to use an AED or when someone takes over. Swap rescuers every 2 min if you can. <a href="#/a/firstaid/cpr">Full CPR guide ›</a> · <a href="#/a/dogs/cpr">Dog CPR ›</a></div>`;
+    $('#mode').value = st.mode;
+    let sound = st.sound, run = false, n = 0, t0 = 0, timer = null, tick = null, breathPause = 0, wake = null;
+    const save = () => store.set('cpr', { mode: $('#mode').value, sound });
+    $('#mode').onchange = save;
+    $('#snd').onclick = () => { sound = !sound; save(); $('#snd').textContent = sound ? '🔊 Beep on' : '🔇 Beep off'; $('#snd').classList.toggle('pri', sound); if (sound) { audioUnlock(); tone(1000, 70); } };
+    $('#test').onclick = () => { audioUnlock(); tone(1000, 70); tone(520, 350, 0.8, 'square', 0.4); };
+    const BEAT = 60000 / 110; // 110 compressions per minute
     function beatFn() {
+      const b = $('#beat'); if (!b) return;
       if (breathPause > 0) { breathPause--; return; }
-      n++; const b = $('#beat'); if (!b) return;
-      const m = $('#mode').value;
-      if (m === '30') { const c = ((n - 1) % 30) + 1; b.textContent = c; if (c === 30) { $('#phase').textContent = 'Give 2 breaths'; breathPause = 9; } else $('#phase').textContent = 'Push'; }
-      else { b.textContent = n; $('#phase').textContent = 'Push hard, push fast'; }
-      b.style.background = 'var(--danger)'; setTimeout(() => b && (b.style.background = 'var(--card2)'), 120); click();
+      n++;
+      if ($('#mode').value === '30') {
+        const c = ((n - 1) % 30) + 1; b.textContent = c;
+        if (c === 30) { $('#phase').textContent = '🫁 Give 2 breaths'; breathPause = 7; if (sound) { tone(520, 450, 0.8, 'square', 0.55); tone(520, 450, 0.8, 'square', 1.65); } }
+        else $('#phase').textContent = c > 25 ? 'Push — breaths coming' : 'Push';
+      } else { b.textContent = n; $('#phase').textContent = 'Push hard, push fast'; }
+      if (sound) tone(1000, 70);
+      b.style.background = 'var(--danger)'; setTimeout(() => { if (b) b.style.background = 'var(--card2)'; }, 110);
       if (navigator.vibrate) navigator.vibrate(40);
     }
-    let wake = null;
+    function stop() { run = false; clearInterval(timer); clearInterval(tick); if (wake) { wake.release(); wake = null; } }
     $('#go').onclick = () => {
-      run = !run; $('#go').textContent = run ? '■ Stop' : '▶ Start';
-      if (run) { n = 0; t0 = Date.now(); timer = setInterval(beatFn, 545); tick = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); $('#tm').textContent = 'Elapsed ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') + (s && s % 120 < 5 ? ' — switch rescuers if possible' : ''); }, 1000); if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => wake = w).catch(() => { }); }
-      else { clearInterval(timer); clearInterval(tick); $('#phase').textContent = 'Stopped'; if (wake) wake.release(); }
+      if (run) { stop(); $('#go').textContent = '▶ Start'; $('#phase').textContent = 'Stopped'; return; }
+      audioUnlock(); // must happen inside the tap for iPhone to allow sound
+      run = true; n = 0; breathPause = 0; t0 = Date.now(); $('#go').textContent = '■ Stop';
+      beatFn(); timer = setInterval(beatFn, BEAT);
+      tick = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); $('#tm').textContent = 'Elapsed ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') + (s && s % 120 < 5 ? ' — switch rescuers if possible' : ''); }, 1000);
+      if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => wake = w).catch(() => { });
     };
-    return () => { clearInterval(timer); clearInterval(tick); if (wake) wake.release(); };
+    return stop;
   });
 
   // ---------- Units ----------
@@ -469,7 +507,7 @@
       <div class="card"><h3>Stopwatch</h3><div class="big mono" id="sw">0:00.0</div><div class="btnrow"><button class="btn pri" id="sws">Start / Stop</button><button class="btn" id="swr">Reset</button></div></div>`;
     let end = 0, int = null, wake = null;
     const cdDraw = () => { const ms = Math.max(0, end - Date.now()); $('#cd').textContent = Math.floor(ms / 6e4) + ':' + String(Math.floor(ms % 6e4 / 1e3)).padStart(2, '0'); if (end && ms <= 0) { clearInterval(int); end = 0; toast('⏰ Time is up'); if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]); for (let i = 0; i < 3; i++) setTimeout(() => { beep(true); setTimeout(() => beep(false), 300); }, i * 600); if (wake) wake.release(); } };
-    view.querySelectorAll('[data-min]').forEach(b => b.onclick = () => { end = Date.now() + b.dataset.min * 6e4; clearInterval(int); int = setInterval(cdDraw, 250); cdDraw(); if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => wake = w).catch(() => { }); });
+    view.querySelectorAll('[data-min]').forEach(b => b.onclick = () => { audioUnlock(); end = Date.now() + b.dataset.min * 6e4; clearInterval(int); int = setInterval(cdDraw, 250); cdDraw(); if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => wake = w).catch(() => { }); });
     $('#cx').onclick = () => { end = 0; clearInterval(int); $('#cd').textContent = '0:00'; };
     const tqDraw = () => { const l = store.get('tqlog', []); $('#tql').innerHTML = l.map(x => `<div class="small" style="padding:6px 0;border-bottom:1px solid var(--line)"><b>${new Date(x.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</b> ${new Date(x.t).toLocaleDateString()} — ${esc(x.n)}</div>`).join(''); };
     $('#tqa').onclick = () => { const l = store.get('tqlog', []); l.unshift({ t: Date.now(), n: $('#tqn').value || 'Event' }); store.set('tqlog', l.slice(0, 50)); $('#tqn').value = ''; tqDraw(); };

@@ -1,11 +1,11 @@
 /* Service worker: caches the whole app for offline use, and caches map tiles as they are viewed/downloaded. */
-const VERSION = '2026.11.17-1';
+const VERSION = '2026.11.18-4';
 const APP_CACHE = 'fg-app-' + VERSION;
 const TILE_CACHE = 'fg-tiles-v1';
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest', 'css/styles.css',
   'js/app.js', 'js/geo.js', 'js/tools.js', 'js/map.js',
-  'data/content-core.js', 'data/content-medical.js', 'data/content-food.js', 'data/content-skills.js', 'data/content-fix.js', 'data/gear.js', 'data/map-se.js',
+  'data/content-core.js', 'data/content-medical.js', 'data/content-dogs.js', 'data/content-food.js', 'data/content-skills.js', 'data/content-fix.js', 'data/gear.js', 'data/map-se.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'
 ];
 

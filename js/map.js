@@ -47,7 +47,7 @@
   // ---------- state ----------
   const S = store.get('mapview', { lat: 32.8, lon: -84.5, z: 5.6 });
   let canvas, ctx, W = 0, H = 0, DPR = 1, dirty = true, raf = 0;
-  let pos = null, follow = store.get('mapfollow', false), gpsStop = null, heading = null;
+  let pos = null, follow = store.get('mapfollow', false), gpsStop = null, heading = null, firstFix = true, gpsErr = null, compBig = store.get('compbig', false), compDisp = 0, hdgSrc = '';
   let tilesOn = store.get('maptiles', ''), tileImgs = new Map();
   let target = store.get('navtarget', null);
   let recording = false, track = store.get('track', []);
@@ -80,8 +80,9 @@
         <canvas id="map"></canvas>
         <div class="mapui tl"><button class="iconbtn" id="mSearch" title="Find a place">🔍</button><button class="iconbtn" id="mLayers" title="Layers & offline maps">🗂️</button></div>
         <div class="mapui tr"><a class="iconbtn" href="#/" title="Close map">✕</a><button class="iconbtn" id="mWps" title="Waypoints">📌</button><button class="iconbtn ${recording ? 'on' : ''}" id="mRec" title="Record track">⏺</button></div>
-        <div class="mapui br"><button class="iconbtn" id="mZin" title="Zoom in">＋</button><button class="iconbtn" id="mZout" title="Zoom out">－</button><button class="iconbtn ${follow ? 'on' : ''}" id="mLoc" title="My location">◎</button></div>
+        <div class="mapui br"><button class="iconbtn" id="mZin" title="Zoom in">＋</button><button class="iconbtn" id="mZout" title="Zoom out">－</button><button class="iconbtn ${follow ? 'on' : ''}" id="mLoc" title="Center on my GPS location">◎</button></div>
         <div class="scale" id="mScale"></div>
+        <div class="mcomp ${compBig ? 'big' : ''}" id="mComp" role="button" tabindex="0" aria-label="Compass. Tap to make it bigger or smaller.">${compassHTML()}</div>
         <div class="hud" id="mHud">Loading map…</div>
         <div class="sheet" id="mSheet" hidden></div>
       </div>`;
@@ -103,22 +104,82 @@
     $('#mWps').onclick = showWaypoints;
     $('#mLayers').onclick = showLayers;
     $('#mSearch').onclick = showSearch;
-    gpsStop = window.FG.watchGPS(onPos, e => { setHud('<span class="muted">' + esc(window.FG.gpsErrText(e)) + '</span>'); });
-    // compass heading for the arrow (only if already permitted)
-    const onOri = e => { if (e.webkitCompassHeading != null) { heading = e.webkitCompassHeading; dirty = true; } };
-    window.addEventListener('deviceorientation', onOri, true);
+    // Live position from the phone's built-in GPS (iOS Core Location via the browser). Works with no cell signal or internet.
+    firstFix = true; gpsErr = null;
+    const onGpsErr = e => { gpsErr = e; updateHud(); };
+    const startGPS = () => { if (gpsStop) gpsStop(); gpsStop = window.FG.watchGPS(onPos, onGpsErr); };
+    if (!bgStop) startGPS(); else { gpsStop = bgStop; bgStop = null; }
+    // iOS pauses location when the app is in the background; restart the GPS watch when it comes back.
+    const onVis = () => { if (document.visibilityState === 'visible') { firstFix = !pos; startGPS(); } };
+    document.addEventListener('visibilitychange', onVis);
+    const hudTimer = setInterval(() => { if (pos) updateHud(); }, 5000);
+    // Live compass (iPhone magnetometer). Shown as the compass widget and as the direction cone on your dot.
+    const onOri = e => {
+      let h = null;
+      if (e.webkitCompassHeading != null && e.webkitCompassHeading >= 0) h = e.webkitCompassHeading; // iOS, magnetic north
+      else if (e.absolute && e.alpha != null) h = 360 - e.alpha;
+      if (h == null) return;
+      const so = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+      const decl = pos ? Geo.declination(pos.lat, pos.lon) : 0; // convert magnetic → true north to match the map
+      heading = (h + so + decl + 360) % 360; hdgSrc = 'compass'; dirty = true; updCompass();
+    };
+    window.addEventListener('deviceorientationabsolute', onOri, true); window.addEventListener('deviceorientation', onOri, true);
+    const sizeComp = () => { const c = $('#mComp'); if (c) c.style.setProperty('--bigc', Math.round(Math.min(Math.sqrt(0.25 * innerWidth * innerHeight), innerWidth * 0.92, innerHeight * 0.6)) + 'px'); };
+    sizeComp(); window.addEventListener('resize', sizeComp);
+    $('#mComp').onclick = () => {
+      // iOS only lets a page read the compass after the person taps something, so the first tap also asks for access.
+      if (hdgSrc !== 'compass' && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission().then(r => { if (r !== 'granted') toast('Compass blocked — allow Motion & Orientation access for this app in Settings'); }).catch(() => { });
+      }
+      compBig = !compBig; store.set('compbig', compBig); $('#mComp').classList.toggle('big', compBig); updCompass();
+    };
+    updCompass();
     loadData().then(() => { dirty = true; updateHud(); }).catch(() => setHud('Map data failed to load.'));
     let wake = null; if (recording && navigator.wakeLock) navigator.wakeLock.request('screen').then(w => wake = w).catch(() => { });
     loop();
     return () => {
       cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); document.removeEventListener('fg-theme', onTheme);
-      window.removeEventListener('deviceorientation', onOri, true);
+      window.removeEventListener('deviceorientation', onOri, true); window.removeEventListener('deviceorientationabsolute', onOri, true); window.removeEventListener('resize', sizeComp);
+      document.removeEventListener('visibilitychange', onVis); clearInterval(hudTimer);
       if (gpsStop && !recording) gpsStop(); else if (gpsStop) bgStop = gpsStop;
+      gpsStop = null;
       if (wake) wake.release();
       store.set('mapview', S); document.body.classList.remove('is-map');
     };
   });
   let bgStop = null;
+
+  // ---------- live compass widget ----------
+  function compassHTML() {
+    let t = '';
+    for (let i = 0; i < 360; i += 10) {
+      const a = (i - 90) * D2R, big = i % 30 === 0, r1 = big ? 78 : 84;
+      t += `<line x1="${(100 + r1 * Math.cos(a)).toFixed(1)}" y1="${(100 + r1 * Math.sin(a)).toFixed(1)}" x2="${(100 + 92 * Math.cos(a)).toFixed(1)}" y2="${(100 + 92 * Math.sin(a)).toFixed(1)}" stroke="currentColor" stroke-width="${big ? 2.4 : 1.2}"/>`;
+      if (big && i % 90) t += `<text class="cdeg" x="${(100 + 66 * Math.cos(a)).toFixed(1)}" y="${(100 + 66 * Math.sin(a) + 4).toFixed(1)}" font-size="11" text-anchor="middle" fill="currentColor">${i}</text>`;
+    }
+    const L = (txt, d, col) => { const a = (d - 90) * D2R; return `<text x="${(100 + 64 * Math.cos(a)).toFixed(1)}" y="${(100 + 64 * Math.sin(a) + 8).toFixed(1)}" font-size="${txt === 'N' ? 26 : 20}" font-weight="800" text-anchor="middle" fill="${col}">${txt}</text>`; };
+    return `<div class="crose" id="cRose"><svg viewBox="0 0 200 200"><circle cx="100" cy="100" r="96" class="cface"/>${t}${L('N', 0, '#e2574c')}${L('E', 90, 'currentColor')}${L('S', 180, 'currentColor')}${L('W', 270, 'currentColor')}
+        <g id="cTgt" style="display:none"><path d="M100 14 L111 40 L100 34 L89 40Z" fill="#4aa3ff" stroke="#fff" stroke-width="1.5"/></g></svg></div>
+      <svg class="ctop" viewBox="0 0 200 200"><path d="M100 2 L110 20 L90 20Z" fill="#e2574c"/>
+        <text id="cDeg" x="100" y="108" font-size="34" font-weight="800" text-anchor="middle" fill="currentColor">—</text>
+        <text id="cSub" x="100" y="130" font-size="12" text-anchor="middle" fill="currentColor" class="cdeg">tap for compass</text></svg>`;
+  }
+  function updCompass() {
+    const rose = $('#cRose'); if (!rose) return;
+    if (heading != null) {
+      const diff = ((heading - compDisp) % 360 + 540) % 360 - 180; compDisp += diff; // shortest way round, no spinning at 359→0
+      rose.style.transform = `rotate(${-compDisp}deg)`;
+      $('#cDeg').textContent = Math.round(heading) + '°';
+    } else $('#cDeg').textContent = '—';
+    let sub = heading == null ? 'tap to start' : Geo.cardinal(heading) + (hdgSrc === 'gps' ? ' (GPS course)' : '');
+    const tg = $('#cTgt');
+    if (target && pos) {
+      const b = Geo.bearing(pos, target); tg.style.display = ''; tg.setAttribute('transform', `rotate(${b} 100 100)`);
+      if (heading != null) { const rel = ((b - heading) % 360 + 540) % 360 - 180; sub = Math.abs(rel) < 8 ? '✓ on course' : (rel > 0 ? 'turn right ' : 'turn left ') + Math.abs(Math.round(rel)) + '°'; }
+      sub += ' · ' + Geo.fmtDist(Geo.dist(pos, target), window.FG.units());
+    } else tg.style.display = 'none';
+    $('#cSub').textContent = sub;
+  }
 
   function resize() {
     DPR = Math.min(window.devicePixelRatio || 1, 2.5);
@@ -338,7 +399,15 @@
   function onPos(p) {
     const c = p.coords; pos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude, spd: c.speed, hdg: c.heading, t: p.timestamp };
     store.set('lastpos', { lat: pos.lat, lon: pos.lon });
+    gpsErr = null;
+    if (firstFix) {
+      // First GPS fix after opening the map: jump to where you are and follow you.
+      firstFix = false; follow = true; store.set('mapfollow', true); if (S.z < 12) S.z = 13;
+      const b = $('#mLoc'); if (b) b.classList.add('on');
+    }
     if (follow) { S.lat = pos.lat; S.lon = pos.lon; }
+    if (hdgSrc !== 'compass' && pos.hdg != null && !isNaN(pos.hdg) && pos.spd > 0.7) { heading = pos.hdg; hdgSrc = 'gps'; }
+    updCompass();
     if (recording && c.accuracy < 60) {
       const last = track[track.length - 1];
       if (!last || Geo.dist({ lat: last[0], lon: last[1] }, pos) > Math.max(8, c.accuracy / 2)) { track.push([+pos.lat.toFixed(6), +pos.lon.toFixed(6), pos.alt == null ? null : Math.round(pos.alt), Date.now()]); store.set('track', track); }
@@ -347,13 +416,18 @@
   }
   function setHud(h) { const el = $('#mHud'); if (el) el.innerHTML = h; }
   function updateHud() {
+    updCompass();
     const u = window.FG.units();
     let h = '';
     if (pos) {
+      const age = (Date.now() - pos.t) / 1000, a = pos.acc;
+      const q = age > 30 ? ['⚪', 'GPS signal lost — last fix ' + Math.round(age) + ' s ago'] : a <= 10 ? ['🟢', 'GPS · strong fix'] : a <= 30 ? ['🟢', 'GPS · good fix'] : a <= 100 ? ['🟡', 'GPS · fair — move to open sky'] : ['🟠', 'Rough location — waiting for satellites'];
+      h += `<div class="small">${q[0]} ${q[1]}</div>`;
       h += `<div class="mono"><b>${pos.lat.toFixed(5)}, ${pos.lon.toFixed(5)}</b> ±${Geo.fmtDist(pos.acc, u)}</div><div class="mono small muted">${Geo.toMGRS(pos.lat, pos.lon)}${pos.alt != null ? ' · alt ' + (u === 'met' ? Math.round(pos.alt) + ' m' : Math.round(pos.alt * 3.28084) + ' ft') : ''}${pos.spd > .3 ? ' · ' + (u === 'met' ? (pos.spd * 3.6).toFixed(1) + ' km/h' : (pos.spd * 2.237).toFixed(1) + ' mph') : ''}</div>`;
       if (target) { const d = Geo.dist(pos, target), b = Geo.bearing(pos, target); const dc = Geo.declination(pos.lat, pos.lon); h += `<div style="margin-top:4px">➜ <b>${esc(target.name)}</b>: ${Geo.fmtDist(d, u)} · ${Math.round(b)}° true (${Math.round((b - dc + 360) % 360)}° mag) ${Geo.cardinal(b)} <a href="#" id="navClear" class="small">clear</a></div>`; }
     } else {
-      h += '<span class="muted">Waiting for GPS… go outside with a clear view of the sky. Long‑press the map to drop a waypoint.</span>';
+      h += gpsErr && gpsErr.code !== 3 ? '<span class="muted">' + esc(window.FG.gpsErrText(gpsErr)) + '</span>'
+        : '<span class="muted">📡 Getting a fix from your phone\'s GPS… go outside with a clear view of the sky (first fix can take up to a minute with no internet). Long‑press the map to drop a waypoint.</span>';
       if (target) h += `<div>➜ ${esc(target.name)} <a href="#" id="navClear" class="small">clear</a></div>`;
     }
     if (recording) h += `<div class="small" style="color:${colors.track}">⏺ Recording track · ${track.length} pts · ${Geo.fmtDist(trackLen(track), u)} — keep app open &amp; screen on</div>`;

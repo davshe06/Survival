@@ -19,7 +19,7 @@
   }
 
   // ---------- guide data ----------
-  const ORDER = ['basics', 'firstaid', 'water', 'fire', 'shelter', 'navigation', 'signal', 'weather', 'wildlife',
+  const ORDER = ['basics', 'firstaid', 'dogs', 'water', 'fire', 'shelter', 'navigation', 'signal', 'weather', 'wildlife',
     'plants', 'garden', 'cooking', 'preserve', 'hunt', 'vehicle', 'power', 'repair', 'make', 'knots', 'hygiene', 'security'];
   const cats = (window.GUIDE || []).slice().sort((a, b) => {
     const ia = ORDER.indexOf(a.id), ib = ORDER.indexOf(b.id);
@@ -56,7 +56,7 @@
     titleEl.textContent = t; document.title = t === 'Field Guide' ? t : t + ' · Field Guide';
     if (back) { backBtn.hidden = false; backBtn.href = back; } else backBtn.hidden = true;
   }
-  window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
+  window.addEventListener('hashchange', () => { render(); view.scrollTop = 0; });
 
   // ---------- views ----------
   route(/^\/$/, () => {
@@ -71,6 +71,7 @@
         <a href="#/a/firstaid/choking"><span>😮‍💨</span>Choking</a>
         <a href="#/a/wildlife/snakes"><span>🐍</span>Snakebite</a>
         <a href="#/a/firstaid/heat"><span>🌡️</span>Heat / Cold</a>
+        <a href="#/c/dogs"><span>🐕</span>Dog first aid</a>
         <a href="#/tools/sos"><span>🔦</span>SOS signal</a>
       </div>
       ${favs.length ? `<h2 class="section">★ Saved</h2><div class="list">${favs.map(id => artRow(findArt(id))).join('')}</div>` : ''}
@@ -333,7 +334,6 @@
     }).catch(() => { });
     navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.type === 'cached') { window.FG_ASSET_COUNT = e.data.total; checkOffline(); } });
   }
-  window.addEventListener('DOMContentLoaded', () => { });
-  // initial render happens after tools/map register routes
-  setTimeout(render, 0);
+  // initial render waits until every script (tools, map, gear) has registered its routes
+  if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', render); else setTimeout(render, 0);
 })();
