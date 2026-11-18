@@ -244,9 +244,9 @@
       }
     }
     if (store.get('mapgrid', false)) drawGrid(vb);
-    const pts = drawPoints(vb);
+    const pts = drawPoints(vb); const pls = MD ? drawPlaces(vb) : [];
     drawTrack(); drawNav(); drawWaypoints(); drawMe();
-    if (MD) { drawLabels(vb); drawDetailLabels(vb, pts); drawContourLabels(); }
+    if (MD) { drawLabels(vb); drawPlaceLabels(pls); drawDetailLabels(vb, pts); drawContourLabels(); }
     drawScale();
   }
 
@@ -350,7 +350,7 @@
   // forest/4WD roads, water sources (USGS GNIS) and contour lines generated
   // on the device from terrain tiles.
   // =====================================================================
-  const LAYERS = Object.assign({ roads: true, water: false, trails: false, forest: false, contours: false }, store.get('maplayers', {}));
+  const LAYERS = Object.assign({ roads: true, water: false, trails: false, forest: false, contours: false, places: false }, store.get('maplayers', {}));
   const PACK_CACHE = 'fg-packs-v1';
   const TERRAIN_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
   let SEIDX = null; const SEDATA = {}, LOCAL = {}, loadingSet = new Set(); let WATER = null, LOCALHAVE = {};
@@ -530,6 +530,80 @@
     document.querySelectorAll('[data-np]').forEach(a => a.onclick = e => { e.preventDefault(); const p = list[+a.dataset.np][1]; S.lat = p.lat; S.lon = p.lon; if (S.z < 13) S.z = 13; follow = false; const b = $('#mLoc'); if (b) b.classList.remove('on'); dirty = true; showPoint(p); });
   }
 
+
+  // ---------- Places: hospitals, fire/EMS, police, ranger stations, campgrounds, trailheads (+ imported repeaters) ----------
+  let PLACES = null;
+  const PL_ICON = { h: ['H', '#e2574c'], f: ['F', '#ff8a3d'], p: ['P', '#4a7bd4'], r: ['R', '#3f9a4a'], v: ['i', '#2a9fb0'], c: ['⛺', '#7a8f3a'], t: ['T', '#a0703c'], x: ['📡', '#8e44ff'] };
+  const PL_NAME = { h: 'Hospital', f: 'Fire / EMS station', p: 'Police / sheriff', r: 'Ranger station / park office', v: 'Visitor center', c: 'Campground / recreation area', t: 'Trailhead', x: 'Radio repeater' };
+  function ensurePlaces() {
+    if (PLACES || loadingSet.has('places')) return;
+    loadingSet.add('places');
+    loadJSON('data/places.json').then(d => {
+      PLACES = d.pts.map(([t, n, x, y, a]) => ({ t, n, a, lat: y / d.scale, lon: x / d.scale, X: mx(x / d.scale), Y: my(y / d.scale) }));
+      addRepeaterPlaces(); dirty = true;
+    }).catch(() => loadingSet.delete('places'));
+  }
+  function addRepeaterPlaces() {
+    if (!PLACES) return; PLACES = PLACES.filter(p => p.t !== 'x');
+    for (const r of store.get('repeaters', [])) if (r.lat != null) PLACES.push({ t: 'x', n: r.f + ' ' + (r.o || '') + (r.t ? ' PL ' + r.t : ''), a: [r.c, r.l].filter(Boolean).join(' · '), lat: r.lat, lon: r.lon, X: mx(r.lon), Y: my(r.lat) });
+  }
+  function drawPlaces(vb) {
+    if (!LAYERS.places) return []; ensurePlaces(); if (!PLACES) return [];
+    if (PLACES._rv !== window.FG.repeatersVer) { PLACES._rv = window.FG.repeatersVer; addRepeaterPlaces(); PLACES._rv = window.FG.repeatersVer; }
+    const z = S.z, out = [];
+    for (const p of PLACES) {
+      if (p.X < vb[0] || p.X > vb[2] || p.Y < vb[1] || p.Y > vb[3]) continue;
+      if (z < 9 && p.t !== 'h') continue; if (z < 10.5 && 'ctvx'.includes(p.t)) continue;
+      const [x, y] = toScreen(p.X, p.Y), [ch, col] = PL_ICON[p.t], r = p.t === 'h' ? 9 : 7.5;
+      ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - r, y - r, r * 2, r * 2, 3) : ctx.rect(x - r, y - r, r * 2, r * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff'; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = '700 ' + (r * 1.3) + 'px ' + colors.font; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ch, x, y + 0.5); ctx.textAlign = 'left';
+      out.push([p, x, y]);
+    }
+    return out;
+  }
+  function drawPlaceLabels(list) { if (S.z < 12) return; for (const [p, x, y] of list) label(p.n, x, y + 15, { size: 10.5, color: PL_ICON[p.t][1], weight: '600' }); }
+  function hitPlace(x, y) {
+    if (!LAYERS.places || !PLACES) return null; let best = null, bd = 16; const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H);
+    for (const p of PLACES) { if (p.X < x0 || p.X > x1 || p.Y < y0 || p.Y > y1) continue; const [sx, sy] = toScreen(p.X, p.Y); const d = Math.hypot(sx - x, sy - y); if (d < bd) { bd = d; best = p; } }
+    return best;
+  }
+  function showPlace(p) {
+    const u = window.FG.units();
+    openSheet(`<h3 style="margin:0 0 4px">${esc(p.n)}</h3><div class="small muted">${PL_NAME[p.t]}${p.a ? ' · ' + esc(p.a) : ''}</div>
+      ${pos ? `<p><b>${Geo.fmtDist(Geo.dist(pos, p), u)}</b> at ${Math.round(Geo.bearing(pos, p))}° ${Geo.cardinal(Geo.bearing(pos, p))}</p>` : ''}
+      ${p.t === 'h' ? '<div class="box warn small">Call 911 first if you can — an ambulance can start treatment on the way. Not every hospital has a full emergency department; this list comes from USGS public data.</div>' : ''}
+      <div class="btnrow"><button class="btn pri" id="plGo">Navigate here</button><button class="btn" id="plSave">Save as waypoint</button></div>`);
+    $('#plGo').onclick = () => chooseNav({ lat: p.lat, lon: p.lon, name: p.n });
+    $('#plSave').onclick = () => { const w = store.get('waypoints', []); w.push({ id: Date.now(), name: p.n, icon: p.t === 'h' ? '🏥' : '📍', lat: p.lat, lon: p.lon, t: Date.now() }); store.set('waypoints', w); toast('Saved'); closeSheet(); dirty = true; };
+  }
+  function nearestPlaces() {
+    ensurePlaces(); if (!PLACES) { toast('Loading places…'); setTimeout(nearestPlaces, 800); return; }
+    const from = pos || { lat: S.lat, lon: S.lon }, u = window.FG.units();
+    const groups = ['h', 'f', 'p', 'r', 'c', 't', 'x'].map(t => [t, PLACES.filter(p => p.t === t).map(p => [Geo.dist(from, p), p]).sort((a, b) => a[0] - b[0]).slice(0, t === 'h' ? 5 : 3)]).filter(([, l]) => l.length);
+    const flat = [];
+    openSheet(`<h3 style="margin:0">🏥 Nearest help & places</h3><p class="small muted">From ${pos ? 'your GPS position' : 'the map center'}.</p>
+      ${groups.map(([t, l]) => `<h3>${PL_NAME[t]}s</h3><div class="list">${l.map(([d, p]) => { flat.push(p); return `<a class="row" href="#" data-pl="${flat.length - 1}"><span class="i" style="color:${PL_ICON[t][1]}">■</span><span class="t"><b>${esc(p.n)}</b><small>${Geo.fmtDist(d, u)} · ${Math.round(Geo.bearing(from, p))}° ${Geo.cardinal(Geo.bearing(from, p))}${p.a ? ' · ' + esc(p.a) : ''}</small></span><span class="chev">›</span></a>`; }).join('')}</div>`).join('')}`);
+    document.querySelectorAll('[data-pl]').forEach(a => a.onclick = e => { e.preventDefault(); const p = flat[+a.dataset.pl]; S.lat = p.lat; S.lon = p.lon; if (S.z < 13) S.z = 13; follow = false; const b = $('#mLoc'); if (b) b.classList.remove('on'); dirty = true; showPlace(p); });
+  }
+
+  // ---------- elevation profile for a route (from terrain tiles) ----------
+  async function routeProfile(r) {
+    const n = r.X.length, total = r.cum[n - 1]; const N = Math.min(120, Math.max(20, Math.round(total / 150)));
+    const samples = []; let j = 0;
+    for (let k = 0; k <= N; k++) { const d = total * k / N; while (j < n - 2 && r.cum[j + 1] < d) j++; samples.push([d, r.coords[j * 2], r.coords[j * 2 + 1]]); }
+    const el = await Promise.all(samples.map(([, la, lo]) => elevationAt(la, lo)));
+    if (el.filter(v => v != null).length < samples.length * 0.8) return null;
+    let up = 0, down = 0, prev = null; const pts = [];
+    samples.forEach(([d], i) => { const e = el[i]; if (e == null) return; if (prev != null) { const dd = e - prev; if (dd > 0) up += dd; else down -= dd; } prev = e; pts.push([d, e]); });
+    return { pts, up, down, min: Math.min(...pts.map(p => p[1])), max: Math.max(...pts.map(p => p[1])) };
+  }
+  function profileSVG(pr, total) {
+    const lo = pr.min, hi = Math.max(pr.max, lo + 10), X = d => d / total * 320, Y = e => 95 - (e - lo) / (hi - lo) * 80;
+    const path = pr.pts.map(([d, e], i) => (i ? 'L' : 'M') + X(d).toFixed(1) + ',' + Y(e).toFixed(1)).join('');
+    return `<svg viewBox="0 0 320 110" style="width:100%;height:auto;margin-top:4px"><path d="${path}L320,100L0,100Z" fill="var(--info-bg)"/><path d="${path}" fill="none" stroke="var(--info-line)" stroke-width="2"/>
+      <text x="2" y="10" font-size="9" fill="currentColor">${fmtElev(hi)}</text><text x="2" y="108" font-size="9" fill="currentColor">${fmtElev(lo)}</text></svg>`;
+  }
+
   // ---------- contours from terrain tiles (computed on the device) ----------
   const terr = new Map(), contourCache = new Map();
   function fmtElev(m) { return window.FG.units() === 'met' ? Math.round(m) + ' m' : Math.round(m * 3.28084).toLocaleString() + ' ft'; }
@@ -603,23 +677,25 @@
   }
 
   // ---------- filter chips ----------
-  const CHIPS = [['roads', '🛣️', 'Roads'], ['water', '💧', 'Water'], ['trails', '🥾', 'Trails'], ['forest', '🌲', 'Forest rds'], ['contours', '⛰️', 'Contours']];
-  function chipsHTML() { return `<div class="mchips" id="mChips">${CHIPS.map(([k, i, l]) => `<button class="chip ${LAYERS[k] ? 'on' : ''}" data-ly="${k}">${i} ${l}</button>`).join('')}<button class="chip ${LAYERS.water ? '' : 'hidden'}" id="mNearW">🔎 Nearest water</button></div>`; }
+  const CHIPS = [['places', '🏥', 'Places'], ['roads', '🛣️', 'Roads'], ['water', '💧', 'Water'], ['trails', '🥾', 'Trails'], ['forest', '🌲', 'Forest rds'], ['contours', '⛰️', 'Contours']];
+  function chipsHTML() { return `<div class="mchips" id="mChips">${CHIPS.map(([k, i, l]) => `<button class="chip ${LAYERS[k] ? 'on' : ''}" data-ly="${k}">${i} ${l}</button>`).join('')}<button class="chip ${LAYERS.water ? '' : 'hidden'}" id="mNearW">🔎 Nearest water</button><button class="chip ${LAYERS.places ? '' : 'hidden'}" id="mNearP">🔎 Nearest help</button></div>`; }
   function bindChips() {
     document.querySelectorAll('[data-ly]').forEach(b => b.onclick = () => {
       const k = b.dataset.ly; LAYERS[k] = !LAYERS[k]; store.set('maplayers', LAYERS); b.classList.toggle('on', LAYERS[k]); dirty = true;
       const nw = $('#mNearW'); if (nw) nw.classList.toggle('hidden', !LAYERS.water);
+      const np = $('#mNearP'); if (np) np.classList.toggle('hidden', !LAYERS.places);
       if (!LAYERS[k]) return;
       const z = S.z, hints = {
         water: z < 8 ? 'Zoom in to see springs and waterfalls (blue dots)' : 'Blue dots = springs & falls. Tap one for distance and directions.',
         trails: z < 8.5 ? 'Zoom in to see hiking trails (pink dashes)' : 'Pink dashes = hiking trails, orange = OHV/motorized trails',
         forest: z < 8.5 ? 'Zoom in to see forest service & 4WD roads' : 'Orange dashes = forest service roads, tan = 4WD/unpaved tracks',
         contours: navigator.onLine ? (z < 11.5 ? 'Zoom in to see contour lines' : 'Contour lines are drawn from terrain data. Save terrain for offline in Layers ›') : 'Contours need saved terrain data for this area — download it in Layers while online',
+        places: 'H = hospital, F = fire/EMS, P = police, R = ranger station; campgrounds & trailheads when zoomed in. Tap “Nearest help”.',
         roads: 'Highways & secondary roads are built in. For every local road, download your state in Layers ›'
       };
       toast(hints[k]);
     });
-    $('#mNearW').onclick = nearestWater;
+    $('#mNearW').onclick = nearestWater; $('#mNearP').onclick = nearestPlaces;
   }
 
 
@@ -724,6 +800,7 @@
     openSheet(`<h3 style="margin:0 0 4px">${MODE_INFO[navRoute.mode][0]} ${MODE_INFO[navRoute.mode][1]} to ${esc(target.name)}</h3>
       <p class="big" style="margin:6px 0">${Geo.fmtDist(p ? p.left : navRoute.total, u)} · ${fmtTime(p ? p.eta : navRoute.time)}</p>
       <p class="small muted">${parts}${navRoute.mode === 'car' && !navRoute.haveLocal ? '<br>⚠️ Local roads for this area aren’t downloaded, so the route only uses highways and forest roads near the ends. Download your state in Layers 🗂️ for better routes.' : ''}</p>
+      <div id="rsProf" class="small muted">⛰️ Checking elevation…</div>
       <h3>Directions</h3>
       <div class="list">${navRoute.steps.map((s, i) => `<div class="row"><span class="i">${i === 0 ? '🚩' : '↪️'}</span><span class="t"><b>${esc(s.name)}</b><small>${kindName[['road', 'trail', 'forest', 'off'].indexOf(s.kind)]} · ${Geo.fmtDist(s.dist, u)}</small></span></div>`).join('')}<div class="row"><span class="i">🏁</span><span class="t"><b>${esc(target.name)}</b></span></div></div>
       <div class="box warn small" style="margin-top:10px">Routes are calculated offline from public map data. Roads and trails can be closed, washed out, gated or on private land — use judgment and obey closures.</div>
@@ -733,6 +810,15 @@
       if (fresh && pos) { S.lat = pos.lat; S.lon = pos.lon; S.z = navRoute.mode === 'car' ? 14 : 15; follow = true; store.set('mapfollow', true); const b = $('#mLoc'); if (b) b.classList.add('on'); dirty = true; }
     };
     $('#rsEnd').onclick = endNav;
+    const r = navRoute;
+    (r.profile ? Promise.resolve(r.profile) : routeProfile(r)).then(pr => {
+      const el = $('#rsProf'); if (!el) return;
+      if (!pr) { el.innerHTML = '⛰️ Elevation profile needs terrain data for this area — save “Terrain” for offline in Layers 🗂️ (or view while online).'; return; }
+      r.profile = pr;
+      if (r.mode === 'foot' && !r.climbAdded) { r.climbAdded = true; r.time += pr.up / 600 * 3600; const st = store.get('navroute', null); if (st) { st.time = r.time; store.set('navroute', st); } updateHud(); }
+      const met = window.FG.units() === 'met', f = v => met ? Math.round(v) + ' m' : Math.round(v * 3.28084).toLocaleString() + ' ft';
+      el.innerHTML = `<b>⛰️ Climb ↑ ${f(pr.up)} · descent ↓ ${f(pr.down)}</b> · high point ${f(pr.max)}${r.mode === 'foot' ? ` · walking time incl. climbing ≈ <b>${fmtTime(r.time)}</b>` : ''}` + profileSVG(pr, r.cum[r.cum.length - 1]);
+    });
   }
   function drawRoute() {
     if (!navRoute) return;
@@ -919,6 +1005,7 @@
     const r = canvas.getBoundingClientRect(); const x = cx - r.left, y = cy - r.top;
     const wps = store.get('waypoints', []);
     for (const w of wps) { const [sx, sy] = toScreen(mx(w.lon), my(w.lat)); if (Math.hypot(sx - x, sy - 14 - y) < 18) return showWaypoint(w); }
+    const pl = hitPlace(x, y); if (pl) return showPlace(pl);
     const p = hitPoint(x, y); if (p && ((LAYERS.water && 'swflr'.includes(p.t)) || S.z >= 11.5)) return showPoint(p);
   }
   function longPress(cx, cy) {

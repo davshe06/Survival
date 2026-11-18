@@ -45,7 +45,7 @@
       if (m) {
         const r = fn(m, q);
         if (typeof r === 'function') cleanup = r;
-        const tab = p.startsWith('/map') ? 'map' : p.startsWith('/tools') ? 'tools' : p.startsWith('/gear') ? 'gear' : (p.startsWith('/more') || p.startsWith('/notes') || p.startsWith('/settings') || p.startsWith('/favs') || p.startsWith('/about')) ? 'more' : 'home';
+        const tab = p.startsWith('/map') ? 'map' : p.startsWith('/tools') ? 'tools' : p.startsWith('/gear') ? 'gear' : /^\/(more|notes|settings|favs|about|ice|plan|supplies)/.test(p) ? 'more' : 'home';
         document.querySelectorAll('.tabbar a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
         return;
       }
@@ -73,7 +73,11 @@
         <a href="#/a/firstaid/heat"><span>🌡️</span>Heat / Cold</a>
         <a href="#/c/dogs"><span>🐕</span>Dog first aid</a>
         <a href="#/tools/sos"><span>🔦</span>SOS signal</a>
+        <a href="#/tools/share"><span>📲</span>Text my location</a>
+        <a href="#/ice"><span>🆔</span>Emergency info</a>
       </div>
+      ${window.FG.suppliesAlert && window.FG.suppliesAlert() ? `<a class="box warn" href="#/supplies" style="display:block;text-decoration:none;color:inherit">⏰ <b>${window.FG.suppliesAlert()} supply item(s)</b> expired or expiring within 30 days — tap to review.</a>` : ''}
+      ${window.FG.backupDue && window.FG.backupDue() ? `<div class="box info" id="bkBanner">💾 It's been a while since you backed up your waypoints, notes and plans. iOS can clear web‑app data you haven't opened in weeks. <div class="btnrow"><a class="btn pri" href="#/settings">Back up now</a><button class="btn" id="bkLater">Remind me later</button></div></div>` : ''}
       ${favs.length ? `<h2 class="section">★ Saved</h2><div class="list">${favs.map(id => artRow(findArt(id))).join('')}</div>` : ''}
       ${recent.length ? `<h2 class="section">Recently viewed</h2><div class="list">${recent.map(id => artRow(findArt(id))).join('')}</div>` : ''}
       <h2 class="section">Topics</h2>
@@ -86,6 +90,7 @@
         <a class="tile" style="--c:#e2574c" href="#/gear"><span class="i">🎒</span><b>Car gear list</b><small>Checklist that fits a car</small></a>
       </div>
       <p class="footer-note">${artIndex.length} articles · works offline once installed. Information is for education; seek professional help whenever it is available.</p>`;
+    const bl = $('#bkLater'); if (bl) bl.onclick = () => { store.set('backupSnooze', Date.now()); $('#bkBanner').remove(); };
     const qi = $('#q');
     qi.addEventListener('keydown', e => { if (e.key === 'Enter') location.hash = '#/search?q=' + encodeURIComponent(qi.value); });
     let t; qi.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { if (qi.value.trim().length > 1) location.hash = '#/search?q=' + encodeURIComponent(qi.value); }, 500); });
@@ -185,6 +190,9 @@
   route(/^\/more$/, () => {
     setTitle('More');
     view.innerHTML = `<div class="list">
+      <a class="row" href="#/ice"><span class="i">🆔</span><span class="t"><b>Emergency info card</b><small>Allergies, medications, blood type, emergency contacts</small></span><span class="chev">›</span></a>
+      <a class="row" href="#/plan"><span class="i">👪</span><span class="t"><b>Family emergency plan</b><small>Meeting places, contacts, evacuation routes — printable</small></span><span class="chev">›</span></a>
+      <a class="row" href="#/supplies"><span class="i">⏰</span><span class="t"><b>Supplies & expiration dates</b><small>Water, food, meds, batteries, fuel — with reminders</small></span><span class="chev">›</span></a>
       <a class="row" href="#/notes"><span class="i">📝</span><span class="t"><b>Notes &amp; logs</b><small>Your own notes, medical log, contacts — saved on this device</small></span><span class="chev">›</span></a>
       <a class="row" href="#/favs"><span class="i">★</span><span class="t"><b>Saved articles</b><small>Articles you starred</small></span><span class="chev">›</span></a>
       <a class="row" href="#/settings"><span class="i">⚙️</span><span class="t"><b>Settings &amp; backup</b><small>Display mode, text size, export / import your data</small></span><span class="chev">›</span></a>
@@ -247,6 +255,7 @@
     view.querySelectorAll('[data-units]').forEach(b => b.onclick = () => { applySetting('units', b.dataset.units); render(); });
     $('#exp').onclick = () => {
       const data = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('fg.')) data[k] = localStorage.getItem(k); }
+      store.set('lastBackup', Date.now());
       const blob = new Blob([JSON.stringify({ app: 'field-guide', v: 1, date: new Date().toISOString(), data }, null, 1)], { type: 'application/json' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'field-guide-backup-' + new Date().toISOString().slice(0, 10) + '.json';
       document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
