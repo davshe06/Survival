@@ -47,7 +47,7 @@
   // ---------- state ----------
   const S = store.get('mapview', { lat: 32.8, lon: -84.5, z: 5.6 });
   let canvas, ctx, W = 0, H = 0, DPR = 1, dirty = true, raf = 0;
-  let pos = null, follow = store.get('mapfollow', false), gpsStop = null, heading = null;
+  let pos = null, follow = store.get('mapfollow', false), gpsStop = null, heading = null, firstFix = true, gpsErr = null, headingOn = store.get('mapheading', false);
   let tilesOn = store.get('maptiles', ''), tileImgs = new Map();
   let target = store.get('navtarget', null);
   let recording = false, track = store.get('track', []);
@@ -80,7 +80,7 @@
         <canvas id="map"></canvas>
         <div class="mapui tl"><button class="iconbtn" id="mSearch" title="Find a place">🔍</button><button class="iconbtn" id="mLayers" title="Layers & offline maps">🗂️</button></div>
         <div class="mapui tr"><a class="iconbtn" href="#/" title="Close map">✕</a><button class="iconbtn" id="mWps" title="Waypoints">📌</button><button class="iconbtn ${recording ? 'on' : ''}" id="mRec" title="Record track">⏺</button></div>
-        <div class="mapui br"><button class="iconbtn" id="mZin" title="Zoom in">＋</button><button class="iconbtn" id="mZout" title="Zoom out">－</button><button class="iconbtn ${follow ? 'on' : ''}" id="mLoc" title="My location">◎</button></div>
+        <div class="mapui br"><button class="iconbtn" id="mZin" title="Zoom in">＋</button><button class="iconbtn" id="mZout" title="Zoom out">－</button><button class="iconbtn ${headingOn ? 'on' : ''}" id="mHdg" title="Show which way the phone is pointing">🧭</button><button class="iconbtn ${follow ? 'on' : ''}" id="mLoc" title="Center on my GPS location">◎</button></div>
         <div class="scale" id="mScale"></div>
         <div class="hud" id="mHud">Loading map…</div>
         <div class="sheet" id="mSheet" hidden></div>
@@ -103,17 +103,42 @@
     $('#mWps').onclick = showWaypoints;
     $('#mLayers').onclick = showLayers;
     $('#mSearch').onclick = showSearch;
-    gpsStop = window.FG.watchGPS(onPos, e => { setHud('<span class="muted">' + esc(window.FG.gpsErrText(e)) + '</span>'); });
-    // compass heading for the arrow (only if already permitted)
-    const onOri = e => { if (e.webkitCompassHeading != null) { heading = e.webkitCompassHeading; dirty = true; } };
-    window.addEventListener('deviceorientation', onOri, true);
+    // Live position from the phone's built-in GPS (iOS Core Location via the browser). Works with no cell signal or internet.
+    firstFix = true; gpsErr = null;
+    const onGpsErr = e => { gpsErr = e; updateHud(); };
+    const startGPS = () => { if (gpsStop) gpsStop(); gpsStop = window.FG.watchGPS(onPos, onGpsErr); };
+    if (!bgStop) startGPS(); else { gpsStop = bgStop; bgStop = null; }
+    // iOS pauses location when the app is in the background; restart the GPS watch when it comes back.
+    const onVis = () => { if (document.visibilityState === 'visible') { firstFix = !pos; startGPS(); } };
+    document.addEventListener('visibilitychange', onVis);
+    const hudTimer = setInterval(() => { if (pos) updateHud(); }, 5000);
+    // Compass heading (iPhone magnetometer) for the direction cone on your position dot.
+    const onOri = e => {
+      let h = null;
+      if (e.webkitCompassHeading != null) h = e.webkitCompassHeading;
+      else if (e.absolute && e.alpha != null) h = 360 - e.alpha;
+      if (h == null || !headingOn) return;
+      const so = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+      heading = (h + so + 360) % 360; dirty = true;
+    };
+    const startHeading = () => { window.addEventListener('deviceorientationabsolute', onOri, true); window.addEventListener('deviceorientation', onOri, true); };
+    if (headingOn) startHeading();
+    $('#mHdg').onclick = () => {
+      if (headingOn) { headingOn = false; heading = null; store.set('mapheading', false); $('#mHdg').classList.remove('on'); dirty = true; return; }
+      const go = () => { headingOn = true; store.set('mapheading', true); $('#mHdg').classList.add('on'); startHeading(); toast('Compass on — the cone shows which way your phone points'); };
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission().then(r => r === 'granted' ? go() : toast('Compass access denied. Allow Motion & Orientation for this app in Settings.')).catch(() => toast('Tap the compass button again'));
+      } else go();
+    };
     loadData().then(() => { dirty = true; updateHud(); }).catch(() => setHud('Map data failed to load.'));
     let wake = null; if (recording && navigator.wakeLock) navigator.wakeLock.request('screen').then(w => wake = w).catch(() => { });
     loop();
     return () => {
       cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); document.removeEventListener('fg-theme', onTheme);
-      window.removeEventListener('deviceorientation', onOri, true);
+      window.removeEventListener('deviceorientation', onOri, true); window.removeEventListener('deviceorientationabsolute', onOri, true);
+      document.removeEventListener('visibilitychange', onVis); clearInterval(hudTimer);
       if (gpsStop && !recording) gpsStop(); else if (gpsStop) bgStop = gpsStop;
+      gpsStop = null;
       if (wake) wake.release();
       store.set('mapview', S); document.body.classList.remove('is-map');
     };
@@ -338,6 +363,12 @@
   function onPos(p) {
     const c = p.coords; pos = { lat: c.latitude, lon: c.longitude, acc: c.accuracy, alt: c.altitude, spd: c.speed, hdg: c.heading, t: p.timestamp };
     store.set('lastpos', { lat: pos.lat, lon: pos.lon });
+    gpsErr = null;
+    if (firstFix) {
+      // First GPS fix after opening the map: jump to where you are and follow you.
+      firstFix = false; follow = true; store.set('mapfollow', true); if (S.z < 12) S.z = 13;
+      const b = $('#mLoc'); if (b) b.classList.add('on');
+    }
     if (follow) { S.lat = pos.lat; S.lon = pos.lon; }
     if (recording && c.accuracy < 60) {
       const last = track[track.length - 1];
@@ -350,10 +381,14 @@
     const u = window.FG.units();
     let h = '';
     if (pos) {
+      const age = (Date.now() - pos.t) / 1000, a = pos.acc;
+      const q = age > 30 ? ['⚪', 'GPS signal lost — last fix ' + Math.round(age) + ' s ago'] : a <= 10 ? ['🟢', 'GPS · strong fix'] : a <= 30 ? ['🟢', 'GPS · good fix'] : a <= 100 ? ['🟡', 'GPS · fair — move to open sky'] : ['🟠', 'Rough location — waiting for satellites'];
+      h += `<div class="small">${q[0]} ${q[1]}</div>`;
       h += `<div class="mono"><b>${pos.lat.toFixed(5)}, ${pos.lon.toFixed(5)}</b> ±${Geo.fmtDist(pos.acc, u)}</div><div class="mono small muted">${Geo.toMGRS(pos.lat, pos.lon)}${pos.alt != null ? ' · alt ' + (u === 'met' ? Math.round(pos.alt) + ' m' : Math.round(pos.alt * 3.28084) + ' ft') : ''}${pos.spd > .3 ? ' · ' + (u === 'met' ? (pos.spd * 3.6).toFixed(1) + ' km/h' : (pos.spd * 2.237).toFixed(1) + ' mph') : ''}</div>`;
       if (target) { const d = Geo.dist(pos, target), b = Geo.bearing(pos, target); const dc = Geo.declination(pos.lat, pos.lon); h += `<div style="margin-top:4px">➜ <b>${esc(target.name)}</b>: ${Geo.fmtDist(d, u)} · ${Math.round(b)}° true (${Math.round((b - dc + 360) % 360)}° mag) ${Geo.cardinal(b)} <a href="#" id="navClear" class="small">clear</a></div>`; }
     } else {
-      h += '<span class="muted">Waiting for GPS… go outside with a clear view of the sky. Long‑press the map to drop a waypoint.</span>';
+      h += gpsErr && gpsErr.code !== 3 ? '<span class="muted">' + esc(window.FG.gpsErrText(gpsErr)) + '</span>'
+        : '<span class="muted">📡 Getting a fix from your phone\'s GPS… go outside with a clear view of the sky (first fix can take up to a minute with no internet). Long‑press the map to drop a waypoint.</span>';
       if (target) h += `<div>➜ ${esc(target.name)} <a href="#" id="navClear" class="small">clear</a></div>`;
     }
     if (recording) h += `<div class="small" style="color:${colors.track}">⏺ Recording track · ${track.length} pts · ${Geo.fmtDist(trackLen(track), u)} — keep app open &amp; screen on</div>`;

@@ -333,7 +333,6 @@
     }).catch(() => { });
     navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.type === 'cached') { window.FG_ASSET_COUNT = e.data.total; checkOffline(); } });
   }
-  window.addEventListener('DOMContentLoaded', () => { });
-  // initial render happens after tools/map register routes
-  setTimeout(render, 0);
+  // initial render waits until every script (tools, map, gear) has registered its routes
+  if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', render); else setTimeout(render, 0);
 })();

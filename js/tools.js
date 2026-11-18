@@ -30,7 +30,7 @@
   // ---------- shared GPS watcher ----------
   function watchGPS(cb, err) {
     if (!navigator.geolocation) { err && err({ message: 'This device has no location support' }); return () => { }; }
-    const id = navigator.geolocation.watchPosition(cb, e => err && err(e), { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+    const id = navigator.geolocation.watchPosition(cb, e => err && err(e), { enableHighAccuracy: true, maximumAge: 0, timeout: 60000 });
     return () => navigator.geolocation.clearWatch(id);
   }
   function gpsErrText(e) {
