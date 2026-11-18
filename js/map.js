@@ -75,7 +75,7 @@
   route(/^\/map$/, (m, q) => {
     setTitle('Map & GPS');
     document.body.classList.add('is-map');
-    if (q.get('lat')) { S.lat = +q.get('lat'); S.lon = +q.get('lon'); S.z = Math.max(S.z, 11); target = { lat: S.lat, lon: S.lon, name: 'Pinned point' }; store.set('navtarget', target); }
+    if (q.get('lat')) { S.lat = +q.get('lat'); S.lon = +q.get('lon'); S.z = Math.max(S.z, 11); target = { lat: S.lat, lon: S.lon, name: 'Pinned point', mode: 'line' }; store.set('navtarget', target); navRoute = null; store.set('navroute', null); }
     view.innerHTML = `
       <div class="mapwrap">
         <canvas id="map"></canvas>
@@ -177,9 +177,10 @@
     let sub = heading == null ? 'tap to start' : Geo.cardinal(heading) + (hdgSrc === 'gps' ? ' (GPS course)' : '');
     const tg = $('#cTgt');
     if (target && pos) {
-      const b = Geo.bearing(pos, target); tg.style.display = ''; tg.setAttribute('transform', `rotate(${b} 100 100)`);
+      const prog = navRoute ? routeProgress() : null, aim = prog ? prog.ahead : target; // follow the route, not the crow-fly line
+      const b = Geo.bearing(pos, aim); tg.style.display = ''; tg.setAttribute('transform', `rotate(${b} 100 100)`);
       if (heading != null) { const rel = ((b - heading) % 360 + 540) % 360 - 180; sub = Math.abs(rel) < 8 ? '✓ on course' : (rel > 0 ? 'turn right ' : 'turn left ') + Math.abs(Math.round(rel)) + '°'; }
-      sub += ' · ' + Geo.fmtDist(Geo.dist(pos, target), window.FG.units());
+      sub += ' · ' + Geo.fmtDist(prog ? prog.left : Geo.dist(pos, target), window.FG.units());
     } else tg.style.display = 'none';
     $('#cSub').textContent = sub;
   }
@@ -328,7 +329,8 @@
     const [tx, ty] = toScreen(mx(target.lon), my(target.lat));
     ctx.beginPath(); ctx.arc(tx, ty, 11, 0, 7); ctx.strokeStyle = colors.nav; ctx.lineWidth = 3; ctx.stroke();
     ctx.beginPath(); ctx.moveTo(tx - 16, ty); ctx.lineTo(tx + 16, ty); ctx.moveTo(tx, ty - 16); ctx.lineTo(tx, ty + 16); ctx.lineWidth = 1.5; ctx.stroke();
-    if (pos) { const [x, y] = toScreen(mx(pos.lon), my(pos.lat)); ctx.beginPath(); ctx.setLineDash([8, 6]); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.strokeStyle = colors.nav; ctx.lineWidth = 2.5; ctx.stroke(); ctx.setLineDash([]); }
+    if (navRoute) drawRoute();
+    else if (pos) { const [x, y] = toScreen(mx(pos.lon), my(pos.lat)); ctx.beginPath(); ctx.setLineDash([8, 6]); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.strokeStyle = colors.nav; ctx.lineWidth = 2.5; ctx.stroke(); ctx.setLineDash([]); }
   }
   function drawScale() {
     const lat = S.lat; const mPerPx = 156543.03 * Math.cos(lat * D2R) / Math.pow(2, S.z);
@@ -462,7 +464,7 @@
     if (LAYERS.contours && z >= 11.5) drawContours(vb, oc);
     if (LAYERS.roads && z >= 11) for (const s of statesInView(vb)) if (LOCAL[s.code]) strokeLines(LOCAL[s.code], vb, f => z >= 13 || f.k === 1, { c: oc.local, w: z >= 14 ? 2 : 1 });
     if (LAYERS.forest && z >= 8.5) { const near = z >= 11.5; for (const d of sts) { if (z >= 10.5) strokeLines(d.fs, vb, f => f.k === 2, { c: oc.four, w: z >= 12 ? 2.4 : 1.6, dash: near ? [5, 4] : null, halo: near }); strokeLines(d.fs, vb, f => f.k === 1, { c: oc.fs, w: z >= 12 ? 3 : 2, dash: near ? [8, 4] : null, halo: near }); } }
-    if (!overlay && z >= 8 && sts.length) for (const d of sts) { strokeLines(d.major, vb, f => f.k === 2, { c: colors.road2, w: z > 11 ? 2.4 : z > 9 ? 1.6 : 1 }); strokeLines(d.major, vb, f => f.k === 1, { c: colors.road1, w: z > 11 ? 3.6 : z > 9 ? 2.6 : 2 }); }
+    if (!overlay && z >= 8 && sts.length) for (const d of sts) { if (z >= 12.5) strokeLines(d.major, vb, f => f.k === 3, { c: colors.road2, w: 1.4 }); strokeLines(d.major, vb, f => f.k === 2, { c: colors.road2, w: z > 11 ? 2.4 : z > 9 ? 1.6 : 1 }); strokeLines(d.major, vb, f => f.k === 1, { c: colors.road1, w: z > 11 ? 3.6 : z > 9 ? 2.6 : 2 }); }
     if (LAYERS.trails && z >= 8.5) { const near = z >= 11.5; for (const d of sts) { strokeLines(d.trails, vb, f => f.k === 'o', { c: oc.ohv, w: z >= 12 ? 2.6 : 1.6, dash: near ? [3, 3] : null, halo: near }); strokeLines(d.trails, vb, f => f.k === 't', { c: oc.trail, w: z >= 12 ? 3 : 1.8, dash: near ? [6, 3] : null, halo: near }); } }
     if (LAYERS.water && MD) { // highlight rivers & lakes from the base map
       ctx.beginPath(); for (const f of MD.rivers) if (visible(f.bb, vb)) for (const r of f.r) pathRing(r);
@@ -515,7 +517,7 @@
       <p class="small" id="ptElev"></p>
       ${water ? `<div class="box warn small"><b class="lbl">Treat before drinking</b>Springs can still carry bacteria and parasites, and some may be dry or on private land. Filter and/or boil. <a href="#/a/water/purify">How to purify ›</a></div>` : ''}
       <div class="btnrow"><button class="btn pri" id="ptGo">Navigate here</button><button class="btn" id="ptSave">Save as waypoint</button></div>`);
-    $('#ptGo').onclick = () => { target = { lat: p.lat, lon: p.lon, name: p.n }; store.set('navtarget', target); closeSheet(); dirty = true; updateHud(); };
+    $('#ptGo').onclick = () => chooseNav({ lat: p.lat, lon: p.lon, name: p.n });
     $('#ptSave').onclick = () => { const w = store.get('waypoints', []); w.push({ id: Date.now(), name: p.n, icon: water ? '💧' : '🗻', lat: p.lat, lon: p.lon, t: Date.now() }); store.set('waypoints', w); toast('Saved'); closeSheet(); dirty = true; };
     elevationAt(p.lat, p.lon).then(e => { const el = $('#ptElev'); if (el && e != null) el.textContent = 'Elevation ≈ ' + fmtElev(e); });
   }
@@ -620,6 +622,132 @@
     $('#mNearW').onclick = nearestWater;
   }
 
+
+  // =====================================================================
+  // Navigation: straight line, drive (roads only) or walk (roads + trails), computed offline in a worker.
+  // =====================================================================
+  let navRoute = store.get('navroute', null); // {mode, coords:[lat,lon,...], kinds, total, time, steps, X, Y, cum}
+  let routeWorker = null, routeReq = 0, offRouteCount = 0, lastReroute = 0, routing = false;
+  const MODE_INFO = { line: ['📏', 'Straight line'], car: ['🚗', 'Drive'], foot: ['🥾', 'Walk / hike'] };
+  function prepRoute(r) {
+    if (!r) return null;
+    const n = r.coords.length / 2; r.X = new Float64Array(n); r.Y = new Float64Array(n); r.cum = new Float64Array(n);
+    for (let i = 0; i < n; i++) { r.X[i] = mx(r.coords[i * 2 + 1]); r.Y[i] = my(r.coords[i * 2]); if (i) r.cum[i] = r.cum[i - 1] + Geo.dist({ lat: r.coords[i * 2 - 2], lon: r.coords[i * 2 - 1] }, { lat: r.coords[i * 2], lon: r.coords[i * 2 + 1] }); }
+    return r;
+  }
+  navRoute = prepRoute(navRoute);
+  function fmtTime(s) { s = Math.round(s / 60); return s < 60 ? s + ' min' : Math.floor(s / 60) + ' h ' + (s % 60) + ' min'; }
+  function statesFor(a, b) {
+    if (!SEIDX) return [];
+    const pad = 0.15, w = [Math.min(a.lon, b.lon) - pad, Math.min(a.lat, b.lat) - pad, Math.max(a.lon, b.lon) + pad, Math.max(a.lat, b.lat) + pad];
+    return SEIDX.states.filter(s => !(s.bbox[2] < w[0] || s.bbox[0] > w[2] || s.bbox[3] < w[1] || s.bbox[1] > w[3])).map(s => s.code);
+  }
+  function computeRoute(mode, from, dest) {
+    if (!routeWorker) routeWorker = new Worker('js/router.js');
+    const id = ++routeReq;
+    return new Promise((res, rej) => {
+      const states = statesFor(from, dest);
+      if (!states.length) return rej(new Error('Routing works inside the 12 Southeast states covered by the map'));
+      routeWorker.onmessage = e => { if (e.data.id !== id) return; e.data.ok ? res(e.data) : rej(new Error(e.data.error)); };
+      routeWorker.onerror = e => rej(new Error('Route engine failed to start' + (e.message ? ': ' + e.message : '')));
+      routeWorker.postMessage({ id, mode, from: { lat: from.lat, lon: from.lon }, to: { lat: dest.lat, lon: dest.lon }, states, packBase: new URL('data/packs/', location.href).href });
+    });
+  }
+  // Ask how to get there
+  function chooseNav(dest) {
+    const u = window.FG.units(), from = pos;
+    const d = from ? Geo.dist(from, dest) : null;
+    openSheet(`<h3 style="margin:0 0 4px">Navigate to ${esc(dest.name)}</h3>
+      <p class="small muted">${from ? Geo.fmtDist(d, u) + ' away in a straight line, ' + Math.round(Geo.bearing(from, dest)) + '° ' + Geo.cardinal(Geo.bearing(from, dest)) : 'Waiting for your GPS position — routes start from where you are.'}</p>
+      <div class="list">
+        <a class="row" href="#" data-nm="line"><span class="i">📏</span><span class="t"><b>Straight line</b><small>Compass bearing and distance, cross‑country</small></span><span class="chev">›</span></a>
+        <a class="row" href="#" data-nm="car"><span class="i">🚗</span><span class="t"><b>Drive — roads only</b><small>Fastest route on highways, local and forest service roads</small></span><span class="chev">›</span></a>
+        <a class="row" href="#" data-nm="foot"><span class="i">🥾</span><span class="t"><b>Walk / hike — roads &amp; trails</b><small>Fastest on foot using any mix of trails, roads and forest roads</small></span><span class="chev">›</span></a>
+      </div>
+      <p class="small" id="navMsg"></p>`);
+    document.querySelectorAll('[data-nm]').forEach(a => a.onclick = async e => {
+      e.preventDefault(); const mode = a.dataset.nm;
+      if (mode === 'line') { setNav(dest, null); closeSheet(); return; }
+      if (!pos) return toast('Waiting for a GPS fix — go outside and try again in a moment');
+      if (routing) return; routing = true;
+      $('#navMsg').innerHTML = '⏳ Finding the fastest ' + (mode === 'car' ? 'driving' : 'walking') + ' route offline…';
+      try {
+        const r = await computeRoute(mode, pos, dest); r.mode = mode; routing = false;
+        setNav(dest, r); showRouteSummary(true);
+      } catch (err) { routing = false; const m = $('#navMsg'); if (m) m.innerHTML = '⚠️ ' + esc(err.message) + '<br><a href="#" id="navLine">Use a straight line instead ›</a>'; const l = $('#navLine'); if (l) l.onclick = ev => { ev.preventDefault(); setNav(dest, null); closeSheet(); }; }
+    });
+  }
+  function setNav(dest, r) {
+    target = { lat: dest.lat, lon: dest.lon, name: dest.name, mode: r ? r.mode : 'line' }; store.set('navtarget', target);
+    navRoute = prepRoute(r); offRouteCount = 0;
+    store.set('navroute', r ? { mode: r.mode, coords: r.coords, kinds: r.kinds, total: r.total, time: r.time, steps: r.steps, byKind: r.byKind, haveLocal: r.haveLocal } : null);
+    if (navRoute) { // overview: fit the whole route on screen
+      let x0 = 1, y0 = 1, x1 = 0, y1 = 0; for (let i = 0; i < navRoute.X.length; i++) { x0 = Math.min(x0, navRoute.X[i]); x1 = Math.max(x1, navRoute.X[i]); y0 = Math.min(y0, navRoute.Y[i]); y1 = Math.max(y1, navRoute.Y[i]); }
+      S.lon = ilon((x0 + x1) / 2); S.lat = ilat((y0 + y1) / 2);
+      S.z = Math.max(4, Math.min(16, Math.log2(Math.min(W / Math.max(x1 - x0, 1e-9), (H * 0.55) / Math.max(y1 - y0, 1e-9)) / 256) - 0.3));
+      follow = false; store.set('mapfollow', false); const b = $('#mLoc'); if (b) b.classList.remove('on');
+    }
+    dirty = true; updateHud();
+  }
+  function endNav() { target = null; navRoute = null; store.set('navtarget', null); store.set('navroute', null); dirty = true; updateHud(); closeSheet(); toast('Navigation ended'); }
+  let progCache = null;
+  function routeProgress() {
+    if (!navRoute || !pos) return null;
+    if (progCache && progCache.t === pos.t && progCache.r === navRoute) return progCache.p;
+    const X = mx(pos.lon), Y = my(pos.lat), n = navRoute.X.length; let best = 0, bd = Infinity;
+    for (let i = 0; i < n; i++) { const dx = navRoute.X[i] - X, dy = navRoute.Y[i] - Y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = i; } }
+    const off = Geo.dist(pos, { lat: navRoute.coords[best * 2], lon: navRoute.coords[best * 2 + 1] });
+    const left = navRoute.total ? Math.max(0, navRoute.cum[n - 1] - navRoute.cum[best]) : 0;
+    const frac = navRoute.cum[n - 1] ? left / navRoute.cum[n - 1] : 0;
+    let step = null; for (const s of navRoute.steps) if (s.at <= best) step = s; const next = navRoute.steps.find(s => s.at > best);
+    // a point ~60 m ahead on the route, for the compass arrow
+    let ahead = n - 1; for (let i = best; i < n; i++) if (navRoute.cum[i] - navRoute.cum[best] > 60) { ahead = i; break; }
+    const res = { idx: best, off, left: left + Math.min(off, 50), eta: navRoute.time * frac, step, next, ahead: { lat: navRoute.coords[ahead * 2], lon: navRoute.coords[ahead * 2 + 1] } };
+    progCache = { t: pos.t, r: navRoute, p: res }; return res;
+  }
+  function checkOffRoute() {
+    if (!navRoute || !pos || routing) return;
+    const p = routeProgress(); if (!p) return;
+    if (Geo.dist(pos, target) < 30) { toast('🏁 You have arrived at ' + target.name); endNav(); return; }
+    const limit = navRoute.mode === 'car' ? 120 : 70;
+    offRouteCount = p.off > limit ? offRouteCount + 1 : 0;
+    if (offRouteCount >= 3 && Date.now() - lastReroute > 30000) {
+      lastReroute = Date.now(); offRouteCount = 0; routing = true; toast('Off route — finding a new route…');
+      computeRoute(navRoute.mode, pos, target).then(r => { r.mode = navRoute.mode; routing = false; setNav(target, r); }).catch(() => { routing = false; });
+    }
+  }
+  function showRouteSummary(fresh) {
+    if (!navRoute || !target) return;
+    const u = window.FG.units(), p = routeProgress();
+    const kindName = ['🛣️ road', '🥾 trail', '🌲 forest road', '🧭 cross‑country'];
+    const parts = navRoute.byKind ? [['road', 0], ['trail', 1], ['forest', 2], ['off', 3]].filter(([k]) => navRoute.byKind[k] > 20).map(([k, i]) => kindName[i] + ' ' + Geo.fmtDist(navRoute.byKind[k], u)).join(' · ') : '';
+    openSheet(`<h3 style="margin:0 0 4px">${MODE_INFO[navRoute.mode][0]} ${MODE_INFO[navRoute.mode][1]} to ${esc(target.name)}</h3>
+      <p class="big" style="margin:6px 0">${Geo.fmtDist(p ? p.left : navRoute.total, u)} · ${fmtTime(p ? p.eta : navRoute.time)}</p>
+      <p class="small muted">${parts}${navRoute.mode === 'car' && !navRoute.haveLocal ? '<br>⚠️ Local roads for this area aren’t downloaded, so the route only uses highways and forest roads near the ends. Download your state in Layers 🗂️ for better routes.' : ''}</p>
+      <h3>Directions</h3>
+      <div class="list">${navRoute.steps.map((s, i) => `<div class="row"><span class="i">${i === 0 ? '🚩' : '↪️'}</span><span class="t"><b>${esc(s.name)}</b><small>${kindName[['road', 'trail', 'forest', 'off'].indexOf(s.kind)]} · ${Geo.fmtDist(s.dist, u)}</small></span></div>`).join('')}<div class="row"><span class="i">🏁</span><span class="t"><b>${esc(target.name)}</b></span></div></div>
+      <div class="box warn small" style="margin-top:10px">Routes are calculated offline from public map data. Roads and trails can be closed, washed out, gated or on private land — use judgment and obey closures.</div>
+      <div class="btnrow"><button class="btn pri" id="rsGo">${fresh ? '▶ Start' : 'Close'}</button><button class="btn red" id="rsEnd">✕ End navigation</button></div>`);
+    $('#rsGo').onclick = () => {
+      closeSheet();
+      if (fresh && pos) { S.lat = pos.lat; S.lon = pos.lon; S.z = navRoute.mode === 'car' ? 14 : 15; follow = true; store.set('mapfollow', true); const b = $('#mLoc'); if (b) b.classList.add('on'); dirty = true; }
+    };
+    $('#rsEnd').onclick = endNav;
+  }
+  function drawRoute() {
+    if (!navRoute) return;
+    const w = ws(), cx = mx(S.lon), cy = my(S.lat), hw = W / 2, hh = H / 2, n = navRoute.X.length;
+    const seg = (from, to, col, width, dash) => { ctx.beginPath(); ctx.moveTo((navRoute.X[from] - cx) * w + hw, (navRoute.Y[from] - cy) * w + hh); for (let i = from + 1; i <= to; i++) ctx.lineTo((navRoute.X[i] - cx) * w + hw, (navRoute.Y[i] - cy) * w + hh); ctx.strokeStyle = col; ctx.lineWidth = width; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]); };
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    seg(0, n - 1, '#fff', 9);
+    // colour by kind: road = blue, trail = purple, forest road = teal, cross-country = dashed
+    let start = 0;
+    for (let i = 1; i <= n - 1; i++) {
+      const k = navRoute.kinds[i - 1], nk = i < n - 1 ? navRoute.kinds[i] : -1;
+      if (nk !== k) { seg(start, i, k === 1 ? '#8e44ff' : k === 2 ? '#0fb5a6' : colors.nav, 5.5, k === 3 ? [7, 6] : null); start = i; }
+    }
+  }
+
   // ---------- raster tiles (optional; cached for offline) ----------
   let tilesFull = false;
   function tileURL(src, z, x, y) { return TILE_SOURCES[src].url.replace('{z}', z).replace('{x}', x).replace('{y}', y); }
@@ -690,6 +818,7 @@
       const b = $('#mLoc'); if (b) b.classList.add('on');
     }
     if (follow) { S.lat = pos.lat; S.lon = pos.lon; }
+    checkOffRoute();
     if (hdgSrc !== 'compass' && pos.hdg != null && !isNaN(pos.hdg) && pos.spd > 0.7) { heading = pos.hdg; hdgSrc = 'gps'; }
     updCompass();
     if (recording && c.accuracy < 60) {
@@ -708,15 +837,20 @@
       const q = age > 30 ? ['⚪', 'GPS signal lost — last fix ' + Math.round(age) + ' s ago'] : a <= 10 ? ['🟢', 'GPS · strong fix'] : a <= 30 ? ['🟢', 'GPS · good fix'] : a <= 100 ? ['🟡', 'GPS · fair — move to open sky'] : ['🟠', 'Rough location — waiting for satellites'];
       h += `<div class="small">${q[0]} ${q[1]}</div>`;
       h += `<div class="mono"><b>${pos.lat.toFixed(5)}, ${pos.lon.toFixed(5)}</b> ±${Geo.fmtDist(pos.acc, u)}</div><div class="mono small muted">${Geo.toMGRS(pos.lat, pos.lon)}${pos.alt != null ? ' · alt ' + (u === 'met' ? Math.round(pos.alt) + ' m' : Math.round(pos.alt * 3.28084) + ' ft') : ''}${pos.spd > .3 ? ' · ' + (u === 'met' ? (pos.spd * 3.6).toFixed(1) + ' km/h' : (pos.spd * 2.237).toFixed(1) + ' mph') : ''}</div>`;
-      if (target) { const d = Geo.dist(pos, target), b = Geo.bearing(pos, target); const dc = Geo.declination(pos.lat, pos.lon); h += `<div style="margin-top:4px">➜ <b>${esc(target.name)}</b>: ${Geo.fmtDist(d, u)} · ${Math.round(b)}° true (${Math.round((b - dc + 360) % 360)}° mag) ${Geo.cardinal(b)} <a href="#" id="navClear" class="small">clear</a></div>`; }
+      if (target && navRoute) {
+        const p = routeProgress();
+        h += `<div class="navbox"><div class="navrow"><span>${MODE_INFO[navRoute.mode][0]} <b>${esc(target.name)}</b> · ${Geo.fmtDist(p.left, u)} · ${fmtTime(p.eta)}</span><button class="btn red navend" id="navEnd">✕ End</button></div>
+          <div class="small">${p.off > (navRoute.mode === 'car' ? 120 : 70) ? '⚠️ Off route — head back to the colored line (rerouting…)' : p.next ? 'Now: ' + esc(p.step ? p.step.name : '') + ' · next: <b>' + esc(p.next.name) + '</b> in ' + Geo.fmtDist(Math.max(0, navRoute.cum[p.next.at] - navRoute.cum[p.idx]), u) : 'Continue to the destination'} · <a href="#" id="navSteps">directions</a></div></div>`;
+      } else if (target) { const d = Geo.dist(pos, target), b = Geo.bearing(pos, target); const dc = Geo.declination(pos.lat, pos.lon); h += `<div class="navbox"><div class="navrow"><span>📏 <b>${esc(target.name)}</b>: ${Geo.fmtDist(d, u)} · ${Math.round(b)}° true (${Math.round((b - dc + 360) % 360)}° mag) ${Geo.cardinal(b)}</span><button class="btn red navend" id="navEnd">✕ End</button></div></div>`; }
     } else {
       h += gpsErr && gpsErr.code !== 3 ? '<span class="muted">' + esc(window.FG.gpsErrText(gpsErr)) + '</span>'
         : '<span class="muted">📡 Getting a fix from your phone\'s GPS… go outside with a clear view of the sky (first fix can take up to a minute with no internet). Long‑press the map to drop a waypoint.</span>';
-      if (target) h += `<div>➜ ${esc(target.name)} <a href="#" id="navClear" class="small">clear</a></div>`;
+      if (target) h += `<div class="navbox"><div class="navrow"><span>${navRoute ? MODE_INFO[navRoute.mode][0] : '📏'} <b>${esc(target.name)}</b></span><button class="btn red navend" id="navEnd">✕ End</button></div></div>`;
     }
     if (recording) h += `<div class="small" style="color:${colors.track}">⏺ Recording track · ${track.length} pts · ${Geo.fmtDist(trackLen(track), u)} — keep app open &amp; screen on</div>`;
     setHud(h);
-    const nc = $('#navClear'); if (nc) nc.onclick = e => { e.preventDefault(); target = null; store.set('navtarget', null); dirty = true; updateHud(); };
+    const ne = $('#navEnd'); if (ne) ne.onclick = e => { e.preventDefault(); endNav(); };
+    const ns = $('#navSteps'); if (ns) ns.onclick = e => { e.preventDefault(); showRouteSummary(false); };
   }
   function trackLen(t) { let s = 0; for (let i = 1; i < t.length; i++) s += Geo.dist({ lat: t[i - 1][0], lon: t[i - 1][1] }, { lat: t[i][0], lon: t[i][1] }); return s; }
 
@@ -798,7 +932,7 @@
       <label class="f">Type</label><select class="inp" id="wpi">${WP_ICONS.map(([i, n]) => `<option value="${i}">${i} ${n}</option>`).join('')}</select>
       <div class="btnrow"><button class="btn pri" id="wps">Save waypoint</button><button class="btn" id="wpg">Navigate here</button><button class="btn" id="wpx">Cancel</button></div>`);
     $('#wps').onclick = () => { const w = store.get('waypoints', []); w.push({ id: Date.now(), name: $('#wpn').value || 'Waypoint', icon: $('#wpi').value, lat: p.lat, lon: p.lon, t: Date.now() }); store.set('waypoints', w); closeSheet(); dirty = true; toast('Waypoint saved'); };
-    $('#wpg').onclick = () => { target = { lat: p.lat, lon: p.lon, name: $('#wpn').value || 'Pin' }; store.set('navtarget', target); closeSheet(); dirty = true; updateHud(); };
+    $('#wpg').onclick = () => chooseNav({ lat: p.lat, lon: p.lon, name: $('#wpn').value || 'Pin' });
     $('#wpx').onclick = closeSheet;
     elevationAt(p.lat, p.lon).then(e => { const el = $('#pinElev'); if (el && e != null) el.textContent = 'Elevation ≈ ' + fmtElev(e) + ' (terrain data)'; });
   }
@@ -813,7 +947,7 @@
       ${pos ? `<p><b>${Geo.fmtDist(Geo.dist(pos, w), u)}</b> at ${Math.round(Geo.bearing(pos, w))}° true ${Geo.cardinal(Geo.bearing(pos, w))}</p>` : ''}
       <p class="small muted">Saved ${new Date(w.t).toLocaleString()}</p>
       <div class="btnrow"><button class="btn pri" id="wgo">Navigate here</button><button class="btn" id="wren">Rename</button><button class="btn red" id="wdel">Delete</button></div>`);
-    $('#wgo').onclick = () => { target = { lat: w.lat, lon: w.lon, name: w.name }; store.set('navtarget', target); closeSheet(); dirty = true; updateHud(); };
+    $('#wgo').onclick = () => chooseNav({ lat: w.lat, lon: w.lon, name: w.name });
     $('#wren').onclick = () => { const n = prompt('Name', w.name); if (!n) return; const a = store.get('waypoints', []); const x = a.find(q => q.id === w.id); if (x) x.name = n; store.set('waypoints', a); closeSheet(); dirty = true; };
     $('#wdel').onclick = () => { if (!confirm('Delete ' + w.name + '?')) return; store.set('waypoints', store.get('waypoints', []).filter(q => q.id !== w.id)); closeSheet(); dirty = true; };
   }
@@ -831,7 +965,7 @@
     document.querySelectorAll('[data-w]').forEach(a => a.onclick = e => { e.preventDefault(); const w = wps.find(x => x.id == a.dataset.w); S.lat = w.lat; S.lon = w.lon; if (S.z < 13) S.z = 14; follow = false; dirty = true; showWaypoint(w); });
     document.querySelectorAll('[data-ts]').forEach(b => b.onclick = () => { const t = store.get('tracks', []); const x = t.find(q => q.id == b.dataset.ts); x.show = !x.show; store.set('tracks', t); dirty = true; showWaypoints(); });
     document.querySelectorAll('[data-td]').forEach(b => b.onclick = () => { if (!confirm('Delete track?')) return; store.set('tracks', store.get('tracks', []).filter(q => q.id != b.dataset.td)); dirty = true; showWaypoints(); });
-    document.querySelectorAll('[data-tf]').forEach(b => b.onclick = () => { const x = store.get('tracks', []).find(q => q.id == b.dataset.tf); const p = x.pts[0]; target = { lat: p[0], lon: p[1], name: 'Start of ' + x.name }; store.set('navtarget', target); x.show = true; closeSheet(); dirty = true; updateHud(); toast('Follow the pink line back to the start'); });
+    document.querySelectorAll('[data-tf]').forEach(b => b.onclick = () => { const x = store.get('tracks', []).find(q => q.id == b.dataset.tf); const p = x.pts[0]; setNav({ lat: p[0], lon: p[1], name: 'Start of ' + x.name }, null); x.show = true; closeSheet(); dirty = true; updateHud(); toast('Follow the pink line back to the start'); });
     $('#addHere').onclick = () => {
       if (!pos) return toast('No GPS fix yet'); const n = prompt('Name this spot', 'Marked ' + new Date().toLocaleTimeString()); if (n == null) return;
       const w = store.get('waypoints', []); w.push({ id: Date.now(), name: n, icon: '📍', lat: pos.lat, lon: pos.lon, alt: pos.alt, t: Date.now() }); store.set('waypoints', w); dirty = true; showWaypoints();
@@ -923,7 +1057,7 @@
       store.get('waypoints', []).forEach(w => { if (w.name.toLowerCase().includes(q)) res.push({ n: '📌 ' + w.name, s: 'Waypoint', x: w.lon, y: w.lat, z: 14 }); });
       res = res.slice(0, 30);
       out.innerHTML = res.map((r, i) => `<a class="row" href="#" data-i="${i}"><span class="t"><b>${esc(r.n)}</b><small>${esc(r.s)}</small></span><span class="chev">›</span></a>`).join('') || '<p class="muted">No match in the built‑in map (it includes ~240 cities/towns, every county, and major airports).</p>';
-      out.querySelectorAll('[data-i]').forEach(a => a.onclick = e => { e.preventDefault(); const r = res[+a.dataset.i]; S.lat = r.y; S.lon = r.x; S.z = r.z; follow = false; $('#mLoc').classList.remove('on'); if (r.pin) { target = { lat: r.y, lon: r.x, name: r.s }; store.set('navtarget', target); updateHud(); } dirty = true; closeSheet(); });
+      out.querySelectorAll('[data-i]').forEach(a => a.onclick = e => { e.preventDefault(); const r = res[+a.dataset.i]; S.lat = r.y; S.lon = r.x; S.z = r.z; follow = false; $('#mLoc').classList.remove('on'); dirty = true; closeSheet(); if (r.pin) chooseNav({ lat: r.y, lon: r.x, name: r.s }); });
     };
   }
 })();

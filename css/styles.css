@@ -295,3 +295,9 @@ body.is-map main { padding: 0; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: #17130a; }
 :root[data-theme="red"] .chip.on { color: #000; }
 :root[data-theme="light"] .chip.on { color: #fff; }
+
+/* Navigation panel in the map HUD */
+.navbox { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.navrow { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.navrow > span { flex: 1; min-width: 0; }
+.btn.navend { min-height: 34px; padding: 0 10px; font-size: .85rem; flex: none; }
