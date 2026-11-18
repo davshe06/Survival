@@ -6,7 +6,8 @@
   const TILE_SOURCES = {
     usgs: { name: 'USGS Topo (contours, trails)', url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}', max: 16, dl: true, attr: 'USGS The National Map' },
     usgsimg: { name: 'USGS Satellite + labels', url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}', max: 16, dl: true, attr: 'USGS The National Map' },
-    osm: { name: 'OpenStreetMap streets (view only)', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', max: 19, dl: false, attr: '© OpenStreetMap contributors' }
+    osm: { name: 'OpenStreetMap streets (view only)', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', max: 19, dl: false, attr: '© OpenStreetMap contributors' },
+    terrain: { name: 'Terrain — contour lines & elevation', url: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png', max: 12, dl: true, overlay: true, attr: 'Terrain Tiles (AWS Open Data; USGS 3DEP/SRTM)' }
   };
   const TILE_CACHE = 'fg-tiles-v1';
 
@@ -81,6 +82,7 @@
         <div class="mapui tl"><button class="iconbtn" id="mSearch" title="Find a place">🔍</button><button class="iconbtn" id="mLayers" title="Layers & offline maps">🗂️</button></div>
         <div class="mapui tr"><a class="iconbtn" href="#/" title="Close map">✕</a><button class="iconbtn" id="mWps" title="Waypoints">📌</button><button class="iconbtn ${recording ? 'on' : ''}" id="mRec" title="Record track">⏺</button></div>
         <div class="mapui br"><button class="iconbtn" id="mZin" title="Zoom in">＋</button><button class="iconbtn" id="mZout" title="Zoom out">－</button><button class="iconbtn ${follow ? 'on' : ''}" id="mLoc" title="Center on my GPS location">◎</button></div>
+        ${chipsHTML()}
         <div class="scale" id="mScale"></div>
         <div class="mcomp ${compBig ? 'big' : ''}" id="mComp" role="button" tabindex="0" aria-label="Compass. Tap to make it bigger or smaller.">${compassHTML()}</div>
         <div class="hud" id="mHud">Loading map…</div>
@@ -100,6 +102,7 @@
       else { follow = true; toast('Waiting for GPS fix…'); }
       store.set('mapfollow', follow); $('#mLoc').classList.toggle('on', follow); dirty = true;
     };
+    bindChips();
     $('#mRec').onclick = toggleRec;
     $('#mWps').onclick = showWaypoints;
     $('#mLayers').onclick = showLayers;
@@ -229,18 +232,20 @@
       }
       // counties
       if (z >= 6.5) { ctx.beginPath(); for (const r of MD.counties) if (visible(r.bb, vb)) pathRing(r); ctx.strokeStyle = colors.county; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]); }
+      drawDetail(vb, overlay);
       // states
       ctx.beginPath(); for (const f of MD.states) if (visible(f.bb, vb)) for (const r of f.r) pathRing(r, true);
       ctx.strokeStyle = colors.state; ctx.lineWidth = z > 8 ? 2 : 1.3; ctx.setLineDash(z > 7 ? [8, 4] : []); ctx.stroke(); ctx.setLineDash([]);
-      if (!overlay) {
-        // roads
+      if (!overlay && !tigerReady(vb)) {
+        // roads (coarse, until the detailed state data is loaded)
         if (z >= 6.5) { ctx.beginPath(); for (const f of MD.roads) if (f.k === 2 && visible(f.bb, vb)) for (const r of f.r) pathRing(r); ctx.strokeStyle = colors.road2; ctx.lineWidth = z > 9 ? 1.6 : 1; ctx.stroke(); }
         if (z >= 4.5) { ctx.beginPath(); for (const f of MD.roads) if (f.k === 1 && visible(f.bb, vb)) for (const r of f.r) pathRing(r); ctx.strokeStyle = colors.road1; ctx.lineWidth = z > 9 ? 3 : z > 7 ? 2 : 1.3; ctx.stroke(); }
       }
     }
     if (store.get('mapgrid', false)) drawGrid(vb);
+    const pts = drawPoints(vb);
     drawTrack(); drawNav(); drawWaypoints(); drawMe();
-    if (MD) drawLabels(vb);
+    if (MD) { drawLabels(vb); drawDetailLabels(vb, pts); drawContourLabels(); }
     drawScale();
   }
 
@@ -284,7 +289,7 @@
     }
     if (z >= 8) MD.airports.forEach(a => { const [x, y] = toScreen(mx(a.x), my(a.y)); label('✈ ' + (a.c || a.n), x, y, { size: 10.5 }); });
     if (z >= 7.8) MD.countyLabels.forEach(c => { const [x, y] = toScreen(mx(c.x), my(c.y)); label(c.n + ' Co.', x, y, { size: 10.5, color: colors.state }); });
-    if (z >= 7 && !(tilesOn && tilesFull)) {
+    if (z >= 7 && !(tilesOn && tilesFull) && !tigerReady(vb)) {
       // road shields: one per named road, at a visible point
       ctx.font = '600 10px ' + colors.font; let n = 0;
       for (const f of MD.roads) {
@@ -337,6 +342,275 @@
   }
   function niceNum(x) { const p = Math.pow(10, Math.floor(Math.log10(x))); const f = x / p; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p; }
 
+
+  // =====================================================================
+  // Detail layers & filter overlays: TIGER roads, local-road packs, trails,
+  // forest/4WD roads, water sources (USGS GNIS) and contour lines generated
+  // on the device from terrain tiles.
+  // =====================================================================
+  const LAYERS = Object.assign({ roads: true, water: false, trails: false, forest: false, contours: false }, store.get('maplayers', {}));
+  const PACK_CACHE = 'fg-packs-v1';
+  const TERRAIN_URL = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+  let SEIDX = null; const SEDATA = {}, LOCAL = {}, loadingSet = new Set(); let WATER = null, LOCALHAVE = {};
+  const GRID = 1024; // world grid cell ≈ 39 km
+  function decLines(list, scale, f32) {
+    return list.map(([k, n, c]) => {
+      const A = f32 ? new Float32Array(c.length) : new Float64Array(c.length); let x = 0, y = 0, b0 = 1, b1 = 1, b2 = 0, b3 = 0;
+      for (let i = 0; i < c.length; i += 2) { x += c[i]; y += c[i + 1]; const X = mx(x / scale), Y = my(y / scale); A[i] = X; A[i + 1] = Y; if (X < b0) b0 = X; if (X > b2) b2 = X; if (Y < b1) b1 = Y; if (Y > b3) b3 = Y; }
+      return { k, n, r: A, bb: [b0, b1, b2, b3] };
+    });
+  }
+  // Compact form for huge local-road packs: one Float32Array of coordinates + offsets (far less memory than objects)
+  function compactLines(list, scale) {
+    const n = list.length; let total = 0; for (const l of list) total += l[2].length;
+    const xy = new Float32Array(total), off = new Uint32Array(n + 1), bb = new Float32Array(n * 4), k = new Uint8Array(n), names = new Array(n), st = new Uint32Array(n);
+    let o = 0;
+    for (let f = 0; f < n; f++) {
+      const c = list[f][2]; k[f] = list[f][0]; names[f] = list[f][1]; off[f] = o; let x = 0, y = 0, b0 = 1, b1 = 1, b2 = 0, b3 = 0;
+      for (let i = 0; i < c.length; i += 2) { x += c[i]; y += c[i + 1]; const X = mx(x / scale), Y = my(y / scale); xy[o++] = X; xy[o++] = Y; if (X < b0) b0 = X; if (X > b2) b2 = X; if (Y < b1) b1 = Y; if (Y > b3) b3 = Y; }
+      bb[f * 4] = b0; bb[f * 4 + 1] = b1; bb[f * 4 + 2] = b2; bb[f * 4 + 3] = b3;
+    }
+    off[n] = o;
+    const tmp = new Map();
+    for (let f = 0; f < n; f++) for (let gx = Math.floor(bb[f * 4] * GRID); gx <= Math.floor(bb[f * 4 + 2] * GRID); gx++) for (let gy = Math.floor(bb[f * 4 + 1] * GRID); gy <= Math.floor(bb[f * 4 + 3] * GRID); gy++) { const key = gx * 100000 + gy; let a = tmp.get(key); if (!a) tmp.set(key, a = []); a.push(f); }
+    const g = new Map(); for (const [key, a] of tmp) g.set(key, Int32Array.from(a));
+    return { compact: true, n, xy, off, bb, k, names, st, g };
+  }
+  function eachVisibleC(c, vb, fn) {
+    const s = ++stampN, { bb, st, g } = c;
+    for (let gx = Math.floor(vb[0] * GRID); gx <= Math.floor(vb[2] * GRID); gx++) for (let gy = Math.floor(vb[1] * GRID); gy <= Math.floor(vb[3] * GRID); gy++) {
+      const a = g.get(gx * 100000 + gy); if (!a) continue;
+      for (let j = 0; j < a.length; j++) { const f = a[j]; if (st[f] === s) continue; st[f] = s; if (bb[f * 4 + 2] < vb[0] || bb[f * 4] > vb[2] || bb[f * 4 + 3] < vb[1] || bb[f * 4 + 1] > vb[3]) continue; fn(f); }
+    }
+  }
+  function gridIndex(feats) {
+    const g = new Map();
+    feats.forEach((f, i) => { for (let gx = Math.floor(f.bb[0] * GRID); gx <= Math.floor(f.bb[2] * GRID); gx++) for (let gy = Math.floor(f.bb[1] * GRID); gy <= Math.floor(f.bb[3] * GRID); gy++) { const key = gx * 100000 + gy; let a = g.get(key); if (!a) g.set(key, a = []); a.push(i); } });
+    return { feats, g };
+  }
+  let stampN = 1;
+  function eachVisible(ix, vb, fn) {
+    if (!ix) return; const st = ++stampN; const { feats, g } = ix;
+    for (let gx = Math.floor(vb[0] * GRID); gx <= Math.floor(vb[2] * GRID); gx++) for (let gy = Math.floor(vb[1] * GRID); gy <= Math.floor(vb[3] * GRID); gy++) {
+      const a = g.get(gx * 100000 + gy); if (!a) continue;
+      for (const i of a) { const f = feats[i]; if (f._s === st) continue; f._s = st; if (visible(f.bb, vb)) fn(f); }
+    }
+  }
+  function statesInView(vb) {
+    if (!SEIDX) return [];
+    const w = [ilon(vb[0]), ilat(vb[3]), ilon(vb[2]), ilat(vb[1])];
+    return SEIDX.states.filter(s => !(s.bbox[2] < w[0] || s.bbox[0] > w[2] || s.bbox[3] < w[1] || s.bbox[1] > w[3]));
+  }
+  async function loadJSON(url) { const r = await fetch(url); if (!r.ok) throw new Error(url); return r.json(); }
+  function ensureDetail(vb) {
+    if (!SEIDX) { if (!loadingSet.has('idx')) { loadingSet.add('idx'); loadJSON('data/se/index.json').then(j => { SEIDX = j; dirty = true; refreshLocalHave(); }).catch(() => { }); } return; }
+    if (S.z < 7.5) return;
+    for (const s of statesInView(vb)) {
+      if (!SEDATA[s.code] && !loadingSet.has(s.code)) {
+        loadingSet.add(s.code);
+        loadJSON('data/se/' + s.code + '.json').then(d => {
+          SEDATA[s.code] = { major: gridIndex(decLines(d.major, 1e5)), fs: gridIndex(decLines(d.fs, 1e5)), trails: gridIndex(decLines(d.trails, 1e5)) }; dirty = true;
+        }).catch(() => loadingSet.delete(s.code));
+      }
+      if (LAYERS.roads && S.z >= 11 && LOCALHAVE[s.code] && !LOCAL[s.code] && !loadingSet.has('L' + s.code)) {
+        loadingSet.add('L' + s.code);
+        caches.open(PACK_CACHE).then(c => c.match(packURL(s.code))).then(r => r ? r.json() : null).then(d => {
+          if (d) { LOCAL[s.code] = compactLines(d.local, 1e5); dirty = true; } else loadingSet.delete('L' + s.code);
+        }).catch(() => loadingSet.delete('L' + s.code));
+      }
+    }
+    if ((LAYERS.water || S.z >= 11) && !WATER && !loadingSet.has('water')) {
+      loadingSet.add('water');
+      loadJSON('data/water.json').then(d => { WATER = d.pts.map(([t, n, x, y]) => ({ t, n, X: mx(x / d.scale), Y: my(y / d.scale), lat: y / d.scale, lon: x / d.scale })); dirty = true; }).catch(() => loadingSet.delete('water'));
+    }
+  }
+  const packURL = code => new URL('data/packs/local-' + code + '.json', location.href).href;
+  async function refreshLocalHave() {
+    if (!('caches' in window) || !SEIDX) return;
+    try { const c = await caches.open(PACK_CACHE); for (const s of SEIDX.states) LOCALHAVE[s.code] = !!(await c.match(packURL(s.code))); } catch (e) { }
+    dirty = true;
+  }
+  function strokeLines(ix, vb, filter, style) {
+    ctx.beginPath(); let any = false;
+    if (ix && ix.compact) {
+      const w = ws(), cx = mx(S.lon), cy = my(S.lat), hw = W / 2, hh = H / 2, { xy, off, k } = ix;
+      eachVisibleC(ix, vb, f => { if (filter && !filter({ k: k[f] })) return; let i = off[f]; ctx.moveTo((xy[i] - cx) * w + hw, (xy[i + 1] - cy) * w + hh); for (i += 2; i < off[f + 1]; i += 2) ctx.lineTo((xy[i] - cx) * w + hw, (xy[i + 1] - cy) * w + hh); any = true; });
+    } else eachVisible(ix, vb, f => { if (!filter || filter(f)) { pathRing(f.r); any = true; } });
+    if (!any) return;
+    if (style.halo) { ctx.strokeStyle = colors.halo; ctx.lineWidth = style.w + 2.5; ctx.setLineDash([]); ctx.stroke(); }
+    ctx.strokeStyle = style.c; ctx.lineWidth = style.w; ctx.setLineDash(style.dash || []); ctx.stroke(); ctx.setLineDash([]);
+  }
+  function overlayColors() {
+    const t = document.documentElement.dataset.theme || 'dark';
+    if (t === 'red') return { trail: '#ff6b61', ohv: '#d0281f', fs: '#ff453a', four: '#b3221a', water: '#ff6b61', spring: '#ff3b30', contour: 'rgba(255,60,50,.45)', contourIdx: 'rgba(255,60,50,.8)', local: '#7a1010' };
+    if (t === 'light') return { trail: '#c2185b', ohv: '#8d4b00', fs: '#d26a00', four: '#9c6b2f', water: '#0a7fd1', spring: '#0066cc', contour: 'rgba(140,90,40,.32)', contourIdx: 'rgba(120,70,25,.7)', local: '#b9ae98' };
+    return { trail: '#ff5ea8', ohv: '#ff9e3d', fs: '#ffb347', four: '#c9a26b', water: '#4cc3ff', spring: '#5fd0ff', contour: 'rgba(214,170,120,.26)', contourIdx: 'rgba(230,185,130,.6)', local: '#5c6152' };
+  }
+  // Called from draw() after counties and before state borders
+  function drawDetail(vb, overlay) {
+    ensureDetail(vb);
+    const z = S.z, oc = overlayColors(), sts = statesInView(vb).map(s => SEDATA[s.code]).filter(Boolean);
+    if (LAYERS.contours && z >= 11.5) drawContours(vb, oc);
+    if (LAYERS.roads && z >= 11) for (const s of statesInView(vb)) if (LOCAL[s.code]) strokeLines(LOCAL[s.code], vb, f => z >= 13 || f.k === 1, { c: oc.local, w: z >= 14 ? 2 : 1 });
+    if (LAYERS.forest && z >= 8.5) for (const d of sts) { strokeLines(d.fs, vb, f => f.k === 2, { c: oc.four, w: z >= 12 ? 2.4 : 1.6, dash: [5, 4], halo: z >= 11 }); strokeLines(d.fs, vb, f => f.k === 1, { c: oc.fs, w: z >= 12 ? 3 : 2, dash: [8, 4], halo: true }); }
+    if (!overlay && z >= 8 && sts.length) for (const d of sts) { strokeLines(d.major, vb, f => f.k === 2, { c: colors.road2, w: z > 11 ? 2.4 : z > 9 ? 1.6 : 1 }); strokeLines(d.major, vb, f => f.k === 1, { c: colors.road1, w: z > 11 ? 3.6 : z > 9 ? 2.6 : 2 }); }
+    if (LAYERS.trails && z >= 8.5) for (const d of sts) { strokeLines(d.trails, vb, f => f.k === 'o', { c: oc.ohv, w: z >= 12 ? 2.6 : 1.8, dash: [3, 3], halo: true }); strokeLines(d.trails, vb, f => f.k === 't', { c: oc.trail, w: z >= 12 ? 3 : 2, dash: [6, 3], halo: true }); }
+    if (LAYERS.water && MD) { // highlight rivers & lakes from the base map
+      ctx.beginPath(); for (const f of MD.rivers) if (visible(f.bb, vb)) for (const r of f.r) pathRing(r);
+      ctx.strokeStyle = oc.water; ctx.lineWidth = Math.max(1.5, (z - 4) * .55); ctx.stroke();
+      ctx.beginPath(); for (const f of MD.lakes) if (visible(f.bb, vb)) for (const r of f.r) pathRing(r, true);
+      ctx.strokeStyle = oc.water; ctx.lineWidth = 2; ctx.stroke();
+    }
+  }
+  // tiger roads replace the coarse Natural Earth roads once loaded
+  function tigerReady(vb) { return S.z >= 8 && statesInView(vb).length > 0 && statesInView(vb).every(s => SEDATA[s.code]); }
+  function drawPoints(vb) {
+    if (!WATER) return; const z = S.z, oc = overlayColors(); const out = [];
+    for (const p of WATER) {
+      if (p.X < vb[0] || p.X > vb[2] || p.Y < vb[1] || p.Y > vb[3]) continue;
+      const isWater = 'swf'.includes(p.t), isLake = 'lr'.includes(p.t);
+      if (isWater && !(LAYERS.water && z >= 8)) continue;
+      if (isLake && !((LAYERS.water && z >= 10.5) || z >= 13)) continue;
+      if (!isWater && !isLake && z < 12.5) continue;
+      const [x, y] = toScreen(p.X, p.Y);
+      if (isWater) {
+        ctx.beginPath(); ctx.arc(x, y, z >= 11 ? 6 : 4.5, 0, 7); ctx.fillStyle = oc.spring; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+        if (p.t === 'f') { ctx.fillStyle = '#fff'; ctx.fillRect(x - 1, y - 3.5, 2, 7); }
+      } else if (isLake) { ctx.beginPath(); ctx.arc(x, y, 3, 0, 7); ctx.fillStyle = oc.water; ctx.fill(); }
+      else { ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x + 4.5, y + 3.5); ctx.lineTo(x - 4.5, y + 3.5); ctx.closePath(); ctx.fillStyle = p.t === 'm' ? colors.text : colors.state; ctx.fill(); }
+      out.push([p, x, y, isWater]);
+    }
+    return out;
+  }
+  function drawDetailLabels(vb, pts) {
+    const z = S.z, oc = overlayColors();
+    if (pts) for (const [p, x, y, isWater] of pts) if (z >= (isWater ? 10.5 : 'lr'.includes(p.t) ? 12 : 13)) label(p.n, x, y + 12, { size: 11, color: isWater || 'lr'.includes(p.t) ? oc.water : colors.text, weight: isWater ? '600' : '' });
+    if (z < 12) return;
+    const sts = statesInView(vb).map(s => SEDATA[s.code]).filter(Boolean); let n = 0;
+    const lab = (ix, col, filter) => eachVisible(ix, vb, f => { if (!f.n || n > 60 || (filter && !filter(f))) return; const r = f.r, m = Math.floor(r.length / 4) * 2; const [x, y] = toScreen(r[m], r[m + 1]); if (label(f.n, x, y, { size: 10.5, weight: '600', color: col })) n++; });
+    for (const d of sts) { if (LAYERS.trails) lab(d.trails, oc.trail); if (LAYERS.forest) lab(d.fs, oc.fs); lab(d.major, colors.road1); }
+    if (LAYERS.roads && z >= 14.5) for (const s of statesInView(vb)) { const c = LOCAL[s.code]; if (!c) continue; let m2 = 0; eachVisibleC(c, vb, f => { const nm = c.names[f]; if (!nm || m2 > 40) return; const a = c.off[f], b2 = c.off[f + 1], mid = a + Math.floor((b2 - a) / 4) * 2; const [x, y] = toScreen(c.xy[mid], c.xy[mid + 1]); if (label(nm, x, y, { size: 10, color: colors.text })) m2++; }); }
+  }
+  function hitPoint(x, y) {
+    if (!WATER) return null; let best = null, bd = 16;
+    const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H);
+    for (const p of WATER) { if (p.X < x0 || p.X > x1 || p.Y < y0 || p.Y > y1) continue; const [sx, sy] = toScreen(p.X, p.Y); const d = Math.hypot(sx - x, sy - y); if (d < bd) { bd = d; best = p; } }
+    return best;
+  }
+  const PT_NAMES = { s: 'Spring', w: 'Well', f: 'Waterfall', l: 'Lake', r: 'Reservoir / pond', m: 'Summit', g: 'Gap / pass' };
+  function showPoint(p) {
+    const u = window.FG.units(); const water = 'swflr'.includes(p.t);
+    openSheet(`<h3 style="margin:0 0 6px">${water ? '💧' : '⛰️'} ${esc(p.n)}</h3><div class="small muted">${PT_NAMES[p.t]} · USGS place name</div>
+      <div class="mono" style="margin-top:6px">${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</div>
+      ${pos ? `<p><b>${Geo.fmtDist(Geo.dist(pos, p), u)}</b> at ${Math.round(Geo.bearing(pos, p))}° ${Geo.cardinal(Geo.bearing(pos, p))}</p>` : ''}
+      <p class="small" id="ptElev"></p>
+      ${water ? `<div class="box warn small"><b class="lbl">Treat before drinking</b>Springs can still carry bacteria and parasites, and some may be dry or on private land. Filter and/or boil. <a href="#/a/water/purify">How to purify ›</a></div>` : ''}
+      <div class="btnrow"><button class="btn pri" id="ptGo">Navigate here</button><button class="btn" id="ptSave">Save as waypoint</button></div>`);
+    $('#ptGo').onclick = () => { target = { lat: p.lat, lon: p.lon, name: p.n }; store.set('navtarget', target); closeSheet(); dirty = true; updateHud(); };
+    $('#ptSave').onclick = () => { const w = store.get('waypoints', []); w.push({ id: Date.now(), name: p.n, icon: water ? '💧' : '🗻', lat: p.lat, lon: p.lon, t: Date.now() }); store.set('waypoints', w); toast('Saved'); closeSheet(); dirty = true; };
+    elevationAt(p.lat, p.lon).then(e => { const el = $('#ptElev'); if (el && e != null) el.textContent = 'Elevation ≈ ' + fmtElev(e); });
+  }
+  function nearestWater() {
+    const from = pos || { lat: S.lat, lon: S.lon }; const u = window.FG.units();
+    if (!WATER) { toast('Loading water data…'); ensureDetail([0, 0, 1, 1]); return; }
+    const list = WATER.filter(p => 'swflr'.includes(p.t)).map(p => [Geo.dist(from, p), p]).sort((a, b) => a[0] - b[0]).slice(0, 15);
+    openSheet(`<h3 style="margin:0">💧 Nearest water sources</h3><p class="small muted">From ${pos ? 'your GPS position' : 'the map center'}. Springs and falls first matter most; ponds and reservoirs are often stagnant — always purify.</p>
+      <div class="list">${list.map(([d, p], i) => `<a class="row" href="#" data-np="${i}"><span class="i">${'sf'.includes(p.t) ? '💧' : '🌊'}</span><span class="t"><b>${esc(p.n)}</b><small>${PT_NAMES[p.t]} · ${Geo.fmtDist(d, u)} · ${Math.round(Geo.bearing(from, p))}° ${Geo.cardinal(Geo.bearing(from, p))}</small></span><span class="chev">›</span></a>`).join('')}</div>`);
+    document.querySelectorAll('[data-np]').forEach(a => a.onclick = e => { e.preventDefault(); const p = list[+a.dataset.np][1]; S.lat = p.lat; S.lon = p.lon; if (S.z < 13) S.z = 13; follow = false; const b = $('#mLoc'); if (b) b.classList.remove('on'); dirty = true; showPoint(p); });
+  }
+
+  // ---------- contours from terrain tiles (computed on the device) ----------
+  const terr = new Map(), contourCache = new Map();
+  function fmtElev(m) { return window.FG.units() === 'met' ? Math.round(m) + ' m' : Math.round(m * 3.28084).toLocaleString() + ' ft'; }
+  function terrTile(z, x, y, cb) {
+    const key = z + '/' + x + '/' + y; let t = terr.get(key);
+    if (t) { if (t.elev) return t.elev; if (cb && t.cbs) t.cbs.push(cb); return null; }
+    t = { cbs: cb ? [cb] : [] }; terr.set(key, t);
+    const img = new Image(); img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0);
+        const px = g.getImageData(0, 0, 256, 256).data; const e = new Float32Array(65536);
+        for (let i = 0; i < 65536; i++) e[i] = px[i * 4] * 256 + px[i * 4 + 1] + px[i * 4 + 2] / 256 - 32768;
+        t.elev = e; t.cbs.forEach(f => f(e)); t.cbs = null; dirty = true;
+      } catch (err) { t.failed = true; }
+      if (terr.size > 300) { const k = terr.keys().next().value; if (k !== key) terr.delete(k); }
+    };
+    img.onerror = () => { t.failed = true; setTimeout(() => terr.delete(key), 30000); };
+    img.src = TERRAIN_URL.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+    return null;
+  }
+  function elevationAt(lat, lon) {
+    return new Promise(res => {
+      const z = 12, n = 4096, fx = mx(lon) * n, fy = my(lat) * n, x = Math.floor(fx), y = Math.floor(fy);
+      const pick = e => res(e[Math.min(255, Math.floor((fy - y) * 256)) * 256 + Math.min(255, Math.floor((fx - x) * 256))]);
+      const e = terrTile(z, x, y, pick); if (e) pick(e);
+      setTimeout(() => res(null), 8000);
+    });
+  }
+  // marching squares on a 256×256 elevation grid → segments in world coords
+  function buildContours(z, tx, ty, e, stepM) {
+    const n = Math.pow(2, z), segs = [], idx = []; const W0 = tx / n, H0 = ty / n, px = 1 / (256 * n);
+    const P = (i, j) => [W0 + (i + .5) * px, H0 + (j + .5) * px];
+    for (let j = 0; j < 255; j++) for (let i = 0; i < 255; i++) {
+      const a = e[j * 256 + i], b = e[j * 256 + i + 1], c = e[(j + 1) * 256 + i + 1], d = e[(j + 1) * 256 + i];
+      const lo = Math.min(a, b, c, d), hi = Math.max(a, b, c, d);
+      for (let L = Math.ceil(lo / stepM) * stepM; L < hi; L += stepM) {
+        const k = (a > L ? 8 : 0) | (b > L ? 4 : 0) | (c > L ? 2 : 0) | (d > L ? 1 : 0); if (k === 0 || k === 15) continue;
+        const tp = () => { const t = (L - a) / (b - a); const p = P(i + t, j); return p; }, rt = () => { const t = (L - b) / (c - b); return P(i + 1, j + t); };
+        const bt = () => { const t = (L - d) / (c - d); return P(i + t, j + 1); }, lf = () => { const t = (L - a) / (d - a); return P(i, j + t); };
+        let pr;
+        switch (k) { case 1: case 14: pr = [lf(), bt()]; break; case 2: case 13: pr = [bt(), rt()]; break; case 3: case 12: pr = [lf(), rt()]; break; case 4: case 11: pr = [tp(), rt()]; break;
+          case 6: case 9: pr = [tp(), bt()]; break; case 7: case 8: pr = [lf(), tp()]; break; case 5: pr = [lf(), tp(), bt(), rt()]; break; case 10: pr = [lf(), bt(), tp(), rt()]; break; }
+        const out = Math.round(L / stepM) % 5 === 0 ? idx : segs;
+        for (let q = 0; q < pr.length; q += 2) out.push(pr[q][0], pr[q][1], pr[q + 1][0], pr[q + 1][1], L);
+      }
+    }
+    return { segs: new Float32Array(segs), idx: new Float32Array(idx) };
+  }
+  function contourStep() { const met = window.FG.units() === 'met'; const z = S.z; return met ? (z >= 14 ? 10 : z >= 12.5 ? 20 : 50) : (z >= 14 ? 40 / 3.28084 : z >= 12.5 ? 100 / 3.28084 : 200 / 3.28084); }
+  function drawContours(vb, oc) {
+    const z = Math.min(12, Math.max(10, Math.floor(S.z))), n = Math.pow(2, z), step = contourStep();
+    const strokeSet = (arr, col, w) => {
+      if (!arr.length) return; ctx.beginPath();
+      for (let i = 0; i < arr.length; i += 5) { const [x1, y1] = toScreen(arr[i], arr[i + 1]); const [x2, y2] = toScreen(arr[i + 2], arr[i + 3]); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); }
+      ctx.strokeStyle = col; ctx.lineWidth = w; ctx.stroke();
+    };
+    let missing = 0, labels = [];
+    for (let tx = Math.floor(vb[0] * n); tx <= Math.floor(vb[2] * n); tx++) for (let ty = Math.floor(vb[1] * n); ty <= Math.floor(vb[3] * n); ty++) {
+      const key = z + '/' + tx + '/' + ty + '/' + step.toFixed(2); let c = contourCache.get(key);
+      if (!c) { const e = terrTile(z, tx, ty); if (!e) { missing++; continue; } c = buildContours(z, tx, ty, e, step); contourCache.set(key, c); if (contourCache.size > 120) contourCache.delete(contourCache.keys().next().value); }
+      strokeSet(c.segs, oc.contour, 1); strokeSet(c.idx, oc.contourIdx, 1.6);
+      for (let i = 0, k = 0; i < c.idx.length && k < 3; i += 5 * 97, k++) labels.push([c.idx[i], c.idx[i + 1], c.idx[i + 4]]);
+    }
+    contourLabels = labels; contourMissing = missing;
+  }
+  let contourLabels = [], contourMissing = 0;
+  function drawContourLabels() {
+    if (!LAYERS.contours || S.z < 11.5) return; const oc = overlayColors(); const met = window.FG.units() === 'met';
+    for (const [X, Y, L] of contourLabels) { const [x, y] = toScreen(X, Y); label(met ? Math.round(L) + '' : Math.round(L * 3.28084 / 10) * 10 + '', x, y, { size: 10, color: oc.contourIdx }); }
+  }
+
+  // ---------- filter chips ----------
+  const CHIPS = [['roads', '🛣️', 'Roads'], ['water', '💧', 'Water'], ['trails', '🥾', 'Trails'], ['forest', '🌲', 'Forest rds'], ['contours', '⛰️', 'Contours']];
+  function chipsHTML() { return `<div class="mchips" id="mChips">${CHIPS.map(([k, i, l]) => `<button class="chip ${LAYERS[k] ? 'on' : ''}" data-ly="${k}">${i} ${l}</button>`).join('')}<button class="chip ${LAYERS.water ? '' : 'hidden'}" id="mNearW">🔎 Nearest water</button></div>`; }
+  function bindChips() {
+    document.querySelectorAll('[data-ly]').forEach(b => b.onclick = () => {
+      const k = b.dataset.ly; LAYERS[k] = !LAYERS[k]; store.set('maplayers', LAYERS); b.classList.toggle('on', LAYERS[k]); dirty = true;
+      const nw = $('#mNearW'); if (nw) nw.classList.toggle('hidden', !LAYERS.water);
+      if (!LAYERS[k]) return;
+      const z = S.z, hints = {
+        water: z < 8 ? 'Zoom in to see springs and waterfalls (blue dots)' : 'Blue dots = springs & falls. Tap one for distance and directions.',
+        trails: z < 8.5 ? 'Zoom in to see hiking trails (pink dashes)' : 'Pink dashes = hiking trails, orange = OHV/motorized trails',
+        forest: z < 8.5 ? 'Zoom in to see forest service & 4WD roads' : 'Orange dashes = forest service roads, tan = 4WD/unpaved tracks',
+        contours: navigator.onLine ? (z < 11.5 ? 'Zoom in to see contour lines' : 'Contour lines are drawn from terrain data. Save terrain for offline in Layers ›') : 'Contours need saved terrain data for this area — download it in Layers while online',
+        roads: 'Highways & secondary roads are built in. For every local road, download your state in Layers ›'
+      };
+      toast(hints[k]);
+    });
+    $('#mNearW').onclick = nearestWater;
+  }
+
   // ---------- raster tiles (optional; cached for offline) ----------
   let tilesFull = false;
   function tileURL(src, z, x, y) { return TILE_SOURCES[src].url.replace('{z}', z).replace('{x}', x).replace('{y}', y); }
@@ -373,7 +647,8 @@
   async function downloadArea(src, maxZ, onProg) {
     const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H);
     const list = [];
-    for (let z = Math.max(1, Math.floor(S.z) - 4); z <= maxZ; z++) {
+    maxZ = Math.min(maxZ, TILE_SOURCES[src].max);
+    for (let z = Math.max(TILE_SOURCES[src].overlay ? 10 : 1, Math.floor(S.z) - 4); z <= maxZ; z++) {
       const n = Math.pow(2, z);
       for (let x = Math.floor(x0 * n); x <= Math.floor(x1 * n); x++) for (let y = Math.floor(y0 * n); y <= Math.floor(y1 * n); y++) list.push(tileURL(src, z, x, y));
     }
@@ -501,6 +776,7 @@
     const r = canvas.getBoundingClientRect(); const x = cx - r.left, y = cy - r.top;
     const wps = store.get('waypoints', []);
     for (const w of wps) { const [sx, sy] = toScreen(mx(w.lon), my(w.lat)); if (Math.hypot(sx - x, sy - 14 - y) < 18) return showWaypoint(w); }
+    const p = hitPoint(x, y); if (p && ((LAYERS.water && 'swflr'.includes(p.t)) || S.z >= 11.5)) return showPoint(p);
   }
   function longPress(cx, cy) {
     const r = canvas.getBoundingClientRect(); const [X, Y] = toWorld(cx - r.left, cy - r.top);
@@ -508,12 +784,14 @@
     if (navigator.vibrate) navigator.vibrate(30);
     openSheet(`<h3 style="margin:0 0 6px">Dropped pin</h3><div class="mono">${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</div><div class="mono small muted">${Geo.toMGRS(p.lat, p.lon)}</div>
       ${pos ? `<p>${Geo.fmtDist(Geo.dist(pos, p), window.FG.units())} at ${Math.round(Geo.bearing(pos, p))}° from you</p>` : ''}
+      <p class="small" id="pinElev"></p>
       <label class="f">Name</label><input class="inp" id="wpn" value="Waypoint ${store.get('waypoints', []).length + 1}">
       <label class="f">Type</label><select class="inp" id="wpi">${WP_ICONS.map(([i, n]) => `<option value="${i}">${i} ${n}</option>`).join('')}</select>
       <div class="btnrow"><button class="btn pri" id="wps">Save waypoint</button><button class="btn" id="wpg">Navigate here</button><button class="btn" id="wpx">Cancel</button></div>`);
     $('#wps').onclick = () => { const w = store.get('waypoints', []); w.push({ id: Date.now(), name: $('#wpn').value || 'Waypoint', icon: $('#wpi').value, lat: p.lat, lon: p.lon, t: Date.now() }); store.set('waypoints', w); closeSheet(); dirty = true; toast('Waypoint saved'); };
     $('#wpg').onclick = () => { target = { lat: p.lat, lon: p.lon, name: $('#wpn').value || 'Pin' }; store.set('navtarget', target); closeSheet(); dirty = true; updateHud(); };
     $('#wpx').onclick = closeSheet;
+    elevationAt(p.lat, p.lon).then(e => { const el = $('#pinElev'); if (el && e != null) el.textContent = 'Elevation ≈ ' + fmtElev(e) + ' (terrain data)'; });
   }
   const WP_ICONS = [['📍', 'General'], ['🚗', 'Vehicle / parking'], ['⛺', 'Camp'], ['💧', 'Water source'], ['🏠', 'Home / shelter'], ['⛽', 'Fuel'], ['🍎', 'Food / forage'], ['🎣', 'Fishing'], ['🏥', 'Medical'], ['⚠️', 'Hazard'], ['🤝', 'Rally point'], ['🗻', 'Lookout']];
 
@@ -581,9 +859,13 @@
     openSheet(`<h3 style="margin:0 0 6px">Map layers</h3>
       <p class="small muted">The built‑in Southeast map (states, counties, cities, highways, rivers, lakes, parks) is always available offline. Detailed topo maps can be added for areas you choose while you have internet.</p>
       <label class="f">Detailed background (needs saved tiles or internet)</label>
-      <select class="inp" id="lyr"><option value="">None — built‑in offline map only</option>${Object.entries(TILE_SOURCES).map(([k, v]) => `<option value="${k}" ${tilesOn === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
+      <select class="inp" id="lyr"><option value="">None — built‑in offline map only</option>${Object.entries(TILE_SOURCES).filter(([, v]) => !v.overlay).map(([k, v]) => `<option value="${k}" ${tilesOn === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
       <label class="chk" style="padding-left:0"><input type="checkbox" id="grd" ${store.get('mapgrid', false) ? 'checked' : ''}><span class="t"><b>Lat/long grid</b></span></label>
-      <h3>Save topo maps for offline use</h3>
+      <h3>Detailed local roads (offline, by state)</h3>
+      <p class="small muted">Highways, state & county roads, forest service roads and hiking trails are built in. Every residential and back road is a separate download per state (zoom in past level 11 to see them).</p>
+      <div class="list" id="packList">${(SEIDX ? SEIDX.states : []).map(st => `<div class="row"><span class="t"><b>${esc(st.name)}</b><small>${(st.local / 1e6).toFixed(0)} MB · ${st.counts.local.toLocaleString()} roads ${LOCALHAVE[st.code] ? '· ✅ saved' : ''}</small></span>${LOCALHAVE[st.code] ? `<button class="btn" data-pdel="${st.code}">Delete</button>` : `<button class="btn pri" data-pget="${st.code}">Download</button>`}</div>`).join('') || '<p class="muted small">Loading state list…</p>'}</div>
+      <p class="small" id="packProg"></p>
+      <h3>Save topo maps & terrain for offline use</h3>
       <ol class="small"><li>While online, pan/zoom so the area you need fills the screen.</li><li>Choose how much detail and tap Download.</li><li>Repeat for each area (home, bug‑out route, destination).</li></ol>
       <div class="two"><div><label class="f">Map</label><select class="inp" id="dls">${Object.entries(TILE_SOURCES).filter(([, v]) => v.dl).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}</select></div>
       <div><label class="f">Max detail</label><select class="inp" id="dlz">${[[12, '12 — county roads'], [13, '13 — towns'], [14, '14 — trails & contours'], [15, '15 — very detailed'], [16, '16 — max (small areas only)']].map(([z, l]) => `<option value="${z}" ${z === 14 ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
@@ -591,7 +873,7 @@
       <div class="btnrow"><button class="btn pri" id="dlGo">Download this area</button><button class="btn" id="dlClear">Delete saved tiles</button></div>
       <p class="small" id="dlProg"></p>
       ${saved.length ? `<h3>Saved areas</h3><div class="list">${saved.map((a, i) => `<a class="row" href="#" data-sa="${i}"><span class="t"><b>${esc(TILE_SOURCES[a.src] ? TILE_SOURCES[a.src].name : a.src)}</b><small>${a.lat.toFixed(3)}, ${a.lon.toFixed(3)} · zoom ≤${a.z} · ${a.n} tiles · ${new Date(a.d).toLocaleDateString()}</small></span><span class="chev">›</span></a>`).join('')}</div>` : ''}
-      <p class="small muted">Map tiles: USGS The National Map (public domain). OpenStreetMap tiles are shown only while online / as you view them (© OpenStreetMap contributors). Built‑in map: Natural Earth, U.S. Census.</p>`);
+      <p class="small muted">Contour lines are calculated on your phone from terrain data — choose “Terrain” above and download the area to use contours and elevation offline. Roads & trails: USGS National Transportation Dataset (U.S. Census TIGER, U.S. Forest Service, NPS). Springs, falls, lakes & peaks: USGS GNIS. Map tiles: USGS The National Map (public domain). OpenStreetMap tiles are shown only while online / as you view them (© OpenStreetMap contributors). Built‑in map: Natural Earth, U.S. Census.</p>`);
     $('#lyr').onchange = () => { tilesOn = $('#lyr').value; store.set('maptiles', tilesOn); dirty = true; };
     $('#grd').onchange = () => { store.set('mapgrid', $('#grd').checked); dirty = true; };
     const est = () => { const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H); let n = 0; for (let z = Math.max(1, Math.floor(S.z) - 4); z <= +$('#dlz').value; z++) { const k = Math.pow(2, z); n += (Math.floor(x1 * k) - Math.floor(x0 * k) + 1) * (Math.floor(y1 * k) - Math.floor(y0 * k) + 1); } $('#dlEst').textContent = `≈ ${n.toLocaleString()} tiles, ~${Math.round(n * 0.025)} MB. ${n > 6000 ? '⚠️ Too many — zoom in first.' : ''}`; };
@@ -606,6 +888,14 @@
       toast(`Saved ${r.n - r.fail} tiles for offline use`); tilesOn = $('#dls').value; store.set('maptiles', tilesOn); dirty = true;
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
     };
+    document.querySelectorAll('[data-pget]').forEach(b => b.onclick = async () => {
+      const code = b.dataset.pget; if (!navigator.onLine) return toast('Connect to the internet to download');
+      b.disabled = true; $('#packProg').textContent = 'Downloading ' + code + ' roads…';
+      try { const r = await fetch(packURL(code), { cache: 'reload' }); if (!r.ok) throw 0; const c = await caches.open(PACK_CACHE); await c.put(packURL(code), r); LOCALHAVE[code] = true; loadingSet.delete('L' + code); if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); toast('Saved local roads for ' + code); dirty = true; showLayers(); }
+      catch (e) { b.disabled = false; $('#packProg').textContent = 'Download failed — try again with a better connection.'; }
+    });
+    document.querySelectorAll('[data-pdel]').forEach(b => b.onclick = async () => { const code = b.dataset.pdel; if (!confirm('Delete saved local roads for ' + code + '?')) return; const c = await caches.open(PACK_CACHE); await c.delete(packURL(code)); LOCALHAVE[code] = false; delete LOCAL[code]; loadingSet.delete('L' + code); dirty = true; showLayers(); });
+    if (!SEIDX) setTimeout(() => { if (SEIDX && $('#packList')) showLayers(); }, 1500);
     $('#dlClear').onclick = async () => { if (!confirm('Delete all saved map tiles?')) return; await caches.delete(TILE_CACHE); store.set('savedAreas', []); toast('Deleted'); showLayers(); };
     document.querySelectorAll('[data-sa]').forEach(a => a.onclick = e => { e.preventDefault(); const s = saved[+a.dataset.sa]; S.lat = s.lat; S.lon = s.lon; S.z = s.zoom; tilesOn = s.src; store.set('maptiles', tilesOn); follow = false; dirty = true; closeSheet(); });
   }
