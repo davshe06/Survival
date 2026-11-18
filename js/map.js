@@ -434,8 +434,17 @@
     ctx.beginPath(); let any = false;
     if (ix && ix.compact) {
       const w = ws(), cx = mx(S.lon), cy = my(S.lat), hw = W / 2, hh = H / 2, { xy, off, k } = ix;
-      eachVisibleC(ix, vb, f => { if (filter && !filter({ k: k[f] })) return; let i = off[f]; ctx.moveTo((xy[i] - cx) * w + hw, (xy[i + 1] - cy) * w + hh); for (i += 2; i < off[f + 1]; i += 2) ctx.lineTo((xy[i] - cx) * w + hw, (xy[i + 1] - cy) * w + hh); any = true; });
-    } else eachVisible(ix, vb, f => { if (!filter || filter(f)) { pathRing(f.r); any = true; } });
+      const minW = 2.5 / w, bbA = ix.bb;
+      eachVisibleC(ix, vb, f => { if (filter && !filter({ k: k[f] })) return; if (bbA[f * 4 + 2] - bbA[f * 4] + bbA[f * 4 + 3] - bbA[f * 4 + 1] < minW) return; let i = off[f]; ctx.moveTo((xy[i] - cx) * w + hw, (xy[i + 1] - cy) * w + hh); for (i += 2; i < off[f + 1]; i += 2) ctx.lineTo((xy[i] - cx) * w + hw, (xy[i + 1] - cy) * w + hh); any = true; });
+    } else {
+      const w = ws(), cx = mx(S.lon), cy = my(S.lat), hw = W / 2, hh = H / 2, minW = 2.5 / w;
+      eachVisible(ix, vb, f => {
+        if ((filter && !filter(f)) || f.bb[2] - f.bb[0] + f.bb[3] - f.bb[1] < minW) return;
+        const r = f.r; let lx = (r[0] - cx) * w + hw, ly = (r[1] - cy) * w + hh; ctx.moveTo(lx, ly);
+        for (let i = 2; i < r.length; i += 2) { const x = (r[i] - cx) * w + hw, y = (r[i + 1] - cy) * w + hh; if (i < r.length - 2 && Math.abs(x - lx) + Math.abs(y - ly) < 1.5) continue; ctx.lineTo(x, y); lx = x; ly = y; }
+        any = true;
+      });
+    }
     if (!any) return;
     if (style.halo) { ctx.strokeStyle = colors.halo; ctx.lineWidth = style.w + 2.5; ctx.setLineDash([]); ctx.stroke(); }
     ctx.strokeStyle = style.c; ctx.lineWidth = style.w; ctx.setLineDash(style.dash || []); ctx.stroke(); ctx.setLineDash([]);
@@ -452,9 +461,9 @@
     const z = S.z, oc = overlayColors(), sts = statesInView(vb).map(s => SEDATA[s.code]).filter(Boolean);
     if (LAYERS.contours && z >= 11.5) drawContours(vb, oc);
     if (LAYERS.roads && z >= 11) for (const s of statesInView(vb)) if (LOCAL[s.code]) strokeLines(LOCAL[s.code], vb, f => z >= 13 || f.k === 1, { c: oc.local, w: z >= 14 ? 2 : 1 });
-    if (LAYERS.forest && z >= 8.5) for (const d of sts) { strokeLines(d.fs, vb, f => f.k === 2, { c: oc.four, w: z >= 12 ? 2.4 : 1.6, dash: [5, 4], halo: z >= 11 }); strokeLines(d.fs, vb, f => f.k === 1, { c: oc.fs, w: z >= 12 ? 3 : 2, dash: [8, 4], halo: true }); }
+    if (LAYERS.forest && z >= 8.5) { const near = z >= 11.5; for (const d of sts) { if (z >= 10.5) strokeLines(d.fs, vb, f => f.k === 2, { c: oc.four, w: z >= 12 ? 2.4 : 1.6, dash: near ? [5, 4] : null, halo: near }); strokeLines(d.fs, vb, f => f.k === 1, { c: oc.fs, w: z >= 12 ? 3 : 2, dash: near ? [8, 4] : null, halo: near }); } }
     if (!overlay && z >= 8 && sts.length) for (const d of sts) { strokeLines(d.major, vb, f => f.k === 2, { c: colors.road2, w: z > 11 ? 2.4 : z > 9 ? 1.6 : 1 }); strokeLines(d.major, vb, f => f.k === 1, { c: colors.road1, w: z > 11 ? 3.6 : z > 9 ? 2.6 : 2 }); }
-    if (LAYERS.trails && z >= 8.5) for (const d of sts) { strokeLines(d.trails, vb, f => f.k === 'o', { c: oc.ohv, w: z >= 12 ? 2.6 : 1.8, dash: [3, 3], halo: true }); strokeLines(d.trails, vb, f => f.k === 't', { c: oc.trail, w: z >= 12 ? 3 : 2, dash: [6, 3], halo: true }); }
+    if (LAYERS.trails && z >= 8.5) { const near = z >= 11.5; for (const d of sts) { strokeLines(d.trails, vb, f => f.k === 'o', { c: oc.ohv, w: z >= 12 ? 2.6 : 1.6, dash: near ? [3, 3] : null, halo: near }); strokeLines(d.trails, vb, f => f.k === 't', { c: oc.trail, w: z >= 12 ? 3 : 1.8, dash: near ? [6, 3] : null, halo: near }); } }
     if (LAYERS.water && MD) { // highlight rivers & lakes from the base map
       ctx.beginPath(); for (const f of MD.rivers) if (visible(f.bb, vb)) for (const r of f.r) pathRing(r);
       ctx.strokeStyle = oc.water; ctx.lineWidth = Math.max(1.5, (z - 4) * .55); ctx.stroke();
