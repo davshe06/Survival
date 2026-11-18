@@ -49,7 +49,8 @@ function speedKmh(mode, f) {
   if (f.layer === 'trails') return 4;
   return 5;
 }
-const OFFROAD_KMH = 3; // walking cross-country to reach the nearest road/trail
+const OFFROAD_KMH = 2;   // walking cross-country to reach the nearest road/trail
+const BUSHWHACK_KMH = 0.6; // long cross-country shortcuts (thick brush, steep terrain) — only when trails don't connect
 
 // ---------- geometry ----------
 let LATK = 1; // metres per 1e-5 degree of longitude at this latitude
@@ -83,7 +84,7 @@ async function findRoute({ mode, from, to, states }) {
   const eA = [], eB = [], eCost = [], eLen = [], eAttr = [];
   const attrs = []; // [layer, name]
   const node = (x, y) => { const key = (x + 2e7) * 1e7 + y; let id = idOf.get(key); if (id === undefined) { id = nx.length; idOf.set(key, id); nx.push(x); ny.push(y); } return id; };
-  let haveLocal = true, lines = 0;
+  let haveLocal = true, lines = 0; const lineEnds = [];
   for (const code of states) {
     const s = await loadState(code);
     if (!s.local) haveLocal = false;
@@ -94,6 +95,7 @@ async function findRoute({ mode, from, to, states }) {
       if (f.layer === 'local' && nearEnds !== Infinity && !endBoxes.some(b => hit(f.bb, b))) continue;
       const ai = attrs.length; attrs.push([f.layer, f.n, f.k]); lines++;
       const p = f.pts; let prev = node(p[0], p[1]);
+      if (mode === 'foot' && f.layer === 'trails') lineEnds.push(prev, node(p[p.length - 2], p[p.length - 1]));
       for (let i = 2; i < p.length; i += 2) {
         const cur = node(p[i], p[i + 1]); if (cur === prev) continue;
         const L = dist(p[i - 2], p[i - 1], p[i], p[i + 1]);
@@ -116,18 +118,72 @@ async function findRoute({ mode, from, to, states }) {
 
   // ---- degree, then join dead ends to anything close (fixes small gaps, trailheads near roads, state lines) ----
   const deg = new Uint16Array(N); for (let i = 0; i < eA.length; i++) { deg[eA[i]]++; deg[eB[i]]++; }
-  const snapM = mode === 'car' ? 20 : 45, offAttr = attrs.length; attrs.push(['off', '', 0]);
+  const snapM = mode === 'car' ? 20 : 100, offAttr = attrs.length; attrs.push(['off', '', 0]);
   const E0 = eA.length;
-  for (let i = 0; i < N; i++) {
-    if (deg[i] !== 1) continue;
-    for (const [d, j] of nearest(nx[i], ny[i], snapM, 2, j => j === i)) {
-      if (d < 0.5) continue;
-      eA.push(i); eB.push(j); eLen.push(d); eCost.push(d / ((mode === 'car' ? 15 : OFFROAD_KMH + 1) / 3.6)); eAttr.push(offAttr);
+  // index edges on the grid so a dead end can join the nearest point ALONG another road/trail (T-junctions)
+  const eGrid = new Map();
+  if (mode === 'foot') for (let e = 0; e < E0; e++) {
+    const a = eA[e], b = eB[e];
+    for (let gx = Math.floor(Math.min(nx[a], nx[b]) / CELL); gx <= Math.floor(Math.max(nx[a], nx[b]) / CELL); gx++)
+      for (let gy = Math.floor(Math.min(ny[a], ny[b]) / CELL); gy <= Math.floor(Math.max(ny[a], ny[b]) / CELL); gy++) { const k = gk(gx, gy); let l = eGrid.get(k); if (!l) eGrid.set(k, l = []); l.push(e); }
+  }
+  const nearestEdge = (i, maxM) => {
+    const x = nx[i], y = ny[i], cx = Math.floor(x / CELL), cy = Math.floor(y / CELL); let best = null;
+    for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+      const l = eGrid.get(gk(gx, gy)); if (!l) continue;
+      for (const e of l) {
+        const a = eA[e], b = eB[e]; if (a === i || b === i || eCost[e] === Infinity) continue;
+        const ax = nx[a] * LATK, ay = ny[a] * metresPerUnitY, bx = nx[b] * LATK, by = ny[b] * metresPerUnitY, px = x * LATK, py = y * metresPerUnitY;
+        const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy; let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0; t = Math.max(0, Math.min(1, t));
+        const qx = ax + t * dx, qy = ay + t * dy, d = Math.hypot(px - qx, py - qy);
+        if (d <= maxM && (!best || d < best.d)) best = { e, t, d };
+      }
+    }
+    return best;
+  };
+  const addEdge = (a, b, L, cost, attr) => { eA.push(a); eB.push(b); eLen.push(L); eCost.push(cost); eAttr.push(attr); };
+  // walking: link trails to any road/trail they cross (crossings often have no shared point in the data)
+  if (mode === 'foot') {
+    const seen = new Set(), cross = (p1, p2, p3, p4) => {
+      const d = (nx[p2] - nx[p1]) * (ny[p4] - ny[p3]) - (ny[p2] - ny[p1]) * (nx[p4] - nx[p3]); if (!d) return false;
+      const t = ((nx[p3] - nx[p1]) * (ny[p4] - ny[p3]) - (ny[p3] - ny[p1]) * (nx[p4] - nx[p3])) / d, u = ((nx[p3] - nx[p1]) * (ny[p2] - ny[p1]) - (ny[p3] - ny[p1]) * (nx[p2] - nx[p1])) / d;
+      return t > 0 && t < 1 && u > 0 && u < 1;
+    };
+    for (let e = 0; e < E0; e++) {
+      if (attrs[eAttr[e]][0] !== 'trails') continue;
+      const a = eA[e], b = eB[e];
+      for (let gx = Math.floor(Math.min(nx[a], nx[b]) / CELL); gx <= Math.floor(Math.max(nx[a], nx[b]) / CELL); gx++)
+        for (let gy = Math.floor(Math.min(ny[a], ny[b]) / CELL); gy <= Math.floor(Math.max(ny[a], ny[b]) / CELL); gy++) {
+          const l = eGrid.get(gk(gx, gy)); if (!l) continue;
+          for (const f of l) {
+            if (f === e || eAttr[f] === eAttr[e]) continue;
+            const c = eA[f], d = eB[f]; if (c === a || c === b || d === a || d === b) continue;
+            const key = e < f ? e * 1e7 + f : f * 1e7 + e; if (seen.has(key)) continue; seen.add(key);
+            if (!cross(a, b, c, d)) continue;
+            let best = null; for (const p of [a, b]) for (const q of [c, d]) { const L = dist(nx[p], ny[p], nx[q], ny[q]); if (!best || L < best[0]) best = [L, p, q]; }
+            addEdge(best[1], best[2], best[0], best[0] / (4 / 3.6), offAttr);
+          }
+        }
     }
   }
-
+  // candidates: dead ends, plus (walking) every trail endpoint — trailheads usually sit near a road or parking lot
+  const cand = new Set(); for (let i = 0; i < N; i++) if (deg[i] === 1) cand.add(i); for (const i of lineEnds) cand.add(i);
+  for (const i of cand) {
+    if (mode === 'car') { for (const [d, j] of nearest(nx[i], ny[i], snapM, 2, j => j === i)) if (d >= 0.5) addEdge(i, j, d, d / (15 / 3.6), offAttr); continue; }
+    const hitE = nearestEdge(i, snapM);
+    if (!hitE || hitE.d < 0.5) continue;
+    const { e, t, d } = hitE, a = eA[e], b = eB[e];
+    let j;
+    if (t < 0.02 || eLen[e] * t < 3) j = a; else if (t > 0.98 || eLen[e] * (1 - t) < 3) j = b;
+    else { // split the edge at the closest point
+      j = nx.length; nx.push(Math.round(nx[a] + (nx[b] - nx[a]) * t)); ny.push(Math.round(ny[a] + (ny[b] - ny[a]) * t));
+      addEdge(a, j, eLen[e] * t, eCost[e] * t, eAttr[e]); addEdge(j, b, eLen[e] * (1 - t), eCost[e] * (1 - t), eAttr[e]);
+      eCost[e] = Infinity; // retire the original edge
+    }
+    addEdge(i, j, d, d / ((mode === 'car' ? 15 : OFFROAD_KMH + 1) / 3.6), offAttr);
+  }
   // ---- start / end: connect to nearby network nodes cross-country ----
-  const S = N, T = N + 1; nx.push(fx, tx); ny.push(fy, ty);
+  const S = nx.length, T = nx.length + 1; nx.push(fx, tx); ny.push(fy, ty);
   const attach = (x, y) => { for (const lim of [300, 1000, 3000, 8000]) { const c = nearest(x, y, lim, 16); if (c.length) return c; } return []; };
   const sc = attach(fx, fy), tc = attach(tx, ty);
   if (!sc.length) throw new Error('No ' + (mode === 'car' ? 'roads' : 'roads or trails') + ' within 8 km of your start');
@@ -139,14 +195,14 @@ async function findRoute({ mode, from, to, states }) {
   if (straight < 1500) { eA.push(S); eB.push(T); eLen.push(straight); eCost.push(straight / (offKmh / 3.6)); eAttr.push(offAttr); }
 
   // ---- adjacency (CSR, both directions except start/end links) ----
-  const NN = N + 2, M = eA.length; const cnt = new Uint32Array(NN + 1);
-  for (let i = 0; i < M; i++) { cnt[eA[i] + 1]++; if (eB[i] !== T && eA[i] !== S) cnt[eB[i] + 1]++; }
+  const NN = nx.length, M = eA.length; const cnt = new Uint32Array(NN + 1);
+  for (let i = 0; i < M; i++) { if (eCost[i] === Infinity) continue; cnt[eA[i] + 1]++; if (eB[i] !== T && eA[i] !== S) cnt[eB[i] + 1]++; }
   for (let i = 0; i < NN; i++) cnt[i + 1] += cnt[i];
   const adjTo = new Int32Array(cnt[NN]), adjE = new Int32Array(cnt[NN]), fill = cnt.slice(0, NN);
-  for (let i = 0; i < M; i++) { adjTo[fill[eA[i]]] = eB[i]; adjE[fill[eA[i]]++] = i; if (eB[i] !== T && eA[i] !== S) { adjTo[fill[eB[i]]] = eA[i]; adjE[fill[eB[i]]++] = i; } }
+  for (let i = 0; i < M; i++) { if (eCost[i] === Infinity) continue; adjTo[fill[eA[i]]] = eB[i]; adjE[fill[eA[i]]++] = i; if (eB[i] !== T && eA[i] !== S) { adjTo[fill[eB[i]]] = eA[i]; adjE[fill[eB[i]]++] = i; } }
 
   // ---- A* (time-based) ----
-  let vmax = 0; for (let i = 0; i < E0; i++) { const v = eLen[i] / Math.max(eCost[i], 1e-6); if (v > vmax) vmax = v; } vmax = Math.max(vmax, offKmh / 3.6);
+  let vmax = 0; for (let i = 0; i < E0; i++) { if (eCost[i] === Infinity) continue; const v = eLen[i] / Math.max(eCost[i], 1e-6); if (v > vmax) vmax = v; } vmax = Math.max(vmax, offKmh / 3.6);
   const g = new Float64Array(NN).fill(Infinity), prevE = new Int32Array(NN).fill(-1), done = new Uint8Array(NN);
   const h = i => dist(nx[i], ny[i], tx, ty) / vmax;
   const heap = new Heap(); g[S] = 0; heap.push(h(S), S); let visited = 0;
@@ -158,7 +214,7 @@ async function findRoute({ mode, from, to, states }) {
       if (ng < g[v]) { g[v] = ng; prevE[v] = e; heap.push(ng + h(v), v); }
     }
     // walking: you can always strike out cross-country from any reached point if the network doesn't connect
-    if (mode === 'foot' && u !== S) { const d = dist(nx[u], ny[u], tx, ty), ng = g[u] + d / (offKmh / 3.6) * 1.5; if (ng < g[T]) { g[T] = ng; prevE[T] = -2 - u; heap.push(ng, T); } }
+    if (mode === 'foot' && u !== S) { const d = dist(nx[u], ny[u], tx, ty), ng = g[u] + d / (BUSHWHACK_KMH / 3.6); if (ng < g[T]) { g[T] = ng; prevE[T] = -2 - u; heap.push(ng, T); } }
   }
   if (!done[T]) throw new Error(mode === 'car' ? 'No connected road route found. Download local roads for this state (Layers 🗂️), or try Walk.' : 'No route found.');
 
