@@ -86,7 +86,7 @@
       <div class="grid">${cats.map(c => `<a class="tile" style="--c:${c.color}" href="#/c/${c.id}"><span class="i">${c.icon}</span><b>${esc(c.title)}</b><small>${esc(c.blurb)}</small></a>`).join('')}</div>
       <h2 class="section">Quick tools</h2>
       <div class="grid">
-        <a class="tile" style="--c:#5aa9c4" href="#/map"><span class="i">🗺️</span><b>Map &amp; GPS</b><small>Offline Southeast map, waypoints, tracks</small></a>
+        <a class="tile" style="--c:#5aa9c4" href="#/map"><span class="i">🗺️</span><b>Map &amp; GPS</b><small>Offline map: Southeast + PA, NJ, NY</small></a>
         <a class="tile" style="--c:#d9a441" href="#/tools/compass"><span class="i">🧭</span><b>Compass</b><small>Heading &amp; bearings</small></a>
         <a class="tile" style="--c:#7fae5a" href="#/tools/water"><span class="i">💧</span><b>Water purify calc</b><small>Bleach / iodine doses</small></a>
         <a class="tile" style="--c:#e2574c" href="#/gear"><span class="i">🎒</span><b>Car gear list</b><small>Checklist that fits a car</small></a>

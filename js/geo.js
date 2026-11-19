@@ -150,7 +150,7 @@
     const nextNew = new Date(+date + (syn - age) * 864e5);
     return { age, illum, name: names[i], icon: icons[i], nextFull, nextNew };
   };
-  // Approximate magnetic declination for the U.S. Southeast (~2025–2027 epoch, ±1–2°). Negative = West.
+  // Approximate magnetic declination for the U.S. Southeast and PA/NJ/NY (~2025–2027 epoch, ±1–2°). Negative = West.
   Geo.declination = (lat, lon) => -55.12 - 0.6671 * lon - 0.1906 * lat;
 
   window.Geo = Geo;

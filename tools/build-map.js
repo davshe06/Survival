@@ -6,8 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const dir = process.argv[2];
 const topojson = require(path.resolve(dir, 'topojson-client-3.1.0/package/dist/topojson-client.min.js'));
-const BB = { w: -95.2, e: -74.0, s: 23.8, n: 40.8 };
-const SE_FIPS = { '01': 'AL', '05': 'AR', '12': 'FL', '13': 'GA', '21': 'KY', '22': 'LA', '28': 'MS', '37': 'NC', '45': 'SC', '47': 'TN', '51': 'VA', '54': 'WV' };
+const BB = { w: -95.2, e: -71.2, s: 23.8, n: 45.6 };
+const SE_FIPS = { '01': 'AL', '05': 'AR', '12': 'FL', '13': 'GA', '21': 'KY', '22': 'LA', '28': 'MS', '37': 'NC', '45': 'SC', '47': 'TN', '51': 'VA', '54': 'WV', '42': 'PA', '34': 'NJ', '36': 'NY' };
 const load = f => JSON.parse(fs.readFileSync(path.join(dir, f)));
 
 function inBB(p) { return p[0] > BB.w && p[0] < BB.e && p[1] > BB.s && p[1] < BB.n; }

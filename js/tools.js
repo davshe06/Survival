@@ -99,7 +99,7 @@
       <div class="card" style="margin-top:14px"><h3>Follow a bearing</h3>
         <div class="two"><div><label class="f">Target bearing (°)</label><input class="inp" id="tgt" inputmode="decimal" placeholder="e.g. 245" value="${esc(s.target)}"></div>
         <div><label class="f">Declination (° , West = negative)</label><input class="inp" id="dcl" inputmode="decimal" placeholder="auto" value="${s.decl == null ? '' : s.decl}"></div></div>
-        <p class="small muted" id="dclnote">Leave declination blank to estimate it from GPS. Southeast U.S. is roughly 0° (Louisiana) to 11° West (Virginia).</p>
+        <p class="small muted" id="dclnote">Leave declination blank to estimate it from GPS. Roughly 0° in Louisiana to 11° West in Virginia and 13–14° West in eastern New York.</p>
         <p class="small" id="steer"></p></div>
       <div class="box warn"><b class="lbl">Phone compass accuracy</b>Phone compasses are thrown off by cars, metal, magnets, phone cases with magnets and power lines. Stand 10+ ft from your car. If readings jump, wave the phone in a figure‑8 to recalibrate. Confirm with a real baseplate compass (keep one in your kit) or the sun.</div>`;
     let heading = null, autoDecl = null, mode = s.mode;
@@ -488,7 +488,7 @@
       <div class="two"><div><label class="f">Last spring frost</label><input class="inp" type="date" id="sp" value="${s.spring}"></div><div><label class="f">First fall frost</label><input class="inp" type="date" id="fa" value="${s.fall}"></div></div>
       <label class="f">…or pick a region</label><select class="inp" id="rg"><option value="">Choose…</option>
       <option value="02-01|12-15">South Florida (frost rare) — zone 10</option><option value="02-15|12-05">Central FL / Gulf coast — zone 9</option><option value="03-10|11-20">S. GA, S. AL, S. MS, LA, coastal SC — zone 8b</option>
-      <option value="03-25|11-05">Atlanta, Birmingham, Columbia, Raleigh — zone 8a/7b</option><option value="04-10|10-25">Nashville, Charlotte foothills, N. GA/AL, AR — zone 7a/7b</option><option value="04-25|10-15">Appalachian mountains, KY, WV, N. VA — zone 6</option></select>
+      <option value="03-25|11-05">Atlanta, Birmingham, Columbia, Raleigh — zone 8a/7b</option><option value="04-10|10-25">Nashville, Charlotte foothills, N. GA/AL, AR — zone 7a/7b</option><option value="04-25|10-15">Appalachian mountains, KY, WV, N. VA — zone 6</option><option value="04-15|10-25">Philadelphia, NJ, NYC, Long Island — zone 7</option><option value="05-05|10-08">Central PA, Hudson Valley, western NY — zone 6</option><option value="05-20|09-25">Adirondacks, Catskills, northern PA highlands — zone 4/5</option></select>
       <div class="btnrow"><button class="btn" id="frGps">📍 Estimate from my GPS</button></div><p class="small" id="frMsg"></p>
       <p class="small muted">Dates are averages — local frost dates vary with elevation. Ask any farm‑supply store or extension office.</p></div><div id="po"></div>`;
     const y = new Date().getFullYear();
@@ -511,7 +511,7 @@
       navigator.geolocation.getCurrentPosition(p => {
         const lat = p.coords.latitude, altFt = p.coords.altitude != null ? p.coords.altitude * 3.281 : null;
         // average dates for the Southeast at sea level by latitude, then ~10 days later (spring) / earlier (fall) per 1,000 ft
-        const L = [[25, 15, 365], [27, 35, 360], [28, 41, 354], [30, 56, 335], [32, 74, 319], [34, 89, 309], [36, 100, 299], [38, 110, 289], [40, 118, 282]];
+        const L = [[25, 15, 365], [27, 35, 360], [28, 41, 354], [30, 56, 335], [32, 74, 319], [34, 89, 309], [36, 100, 299], [38, 110, 289], [40, 118, 282], [42, 128, 275], [44, 138, 267], [45.5, 145, 262]];
         let i = 0; while (i < L.length - 2 && lat > L[i + 1][0]) i++;
         const f = Math.max(0, Math.min(1, (lat - L[i][0]) / (L[i + 1][0] - L[i][0]))), sp = L[i][1] + f * (L[i + 1][1] - L[i][1]), fa = L[i][2] + f * (L[i + 1][2] - L[i][2]), adj = altFt ? altFt / 100 : 0;
         const d = n => { const x = new Date(y, 0, 1); x.setDate(Math.round(n)); return x.toISOString().slice(0, 10); };
