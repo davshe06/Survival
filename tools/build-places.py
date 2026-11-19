@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Build data/places.json (hospitals, fire/EMS, police, ranger stations, visitor centers, campgrounds,
 trailheads) from the USGS National Structures Dataset (public domain), one state at a time.
-Usage: python3 tools/build-places.py <work-dir> <out-file>"""
+Usage: python3 tools/build-places.py <work-dir> <out-file> [State_Name ...]
+With state names, only those states are downloaded and merged into an existing <out-file>."""
 import json, os, subprocess, sys, zipfile, shapefile
-STATES = ['Alabama', 'Arkansas', 'Florida', 'Georgia', 'Kentucky', 'Louisiana', 'Mississippi', 'North_Carolina', 'South_Carolina', 'Tennessee', 'Virginia', 'West_Virginia']
+STATES = ['Alabama', 'Arkansas', 'Florida', 'Georgia', 'Kentucky', 'Louisiana', 'Mississippi', 'North_Carolina', 'South_Carolina', 'Tennessee', 'Virginia', 'West_Virginia', 'Pennsylvania', 'New_Jersey', 'New_York']
 URL = 'https://prd-tnm.s3.amazonaws.com/StagedProducts/Struct/Shape/STRUCT_{}_State_Shape.zip'
 KEEP = {80012: 'h', 74026: 'f', 74001: 'f', 74034: 'p', 83033: 'r', 83023: 'r', 82048: 'v', 82008: 'c', 82040: 'c', 82047: 't'}
 work, out = sys.argv[1], sys.argv[2]; os.makedirs(work, exist_ok=True); pts = []; seen = set()
-for st in STATES:
+only = sys.argv[3:]
+if only and os.path.exists(out):
+    pts = json.load(open(out))['pts']; seen = {(p[0], round(p[2] / 1e5, 4), round(p[3] / 1e5, 4)) for p in pts}
+for st in (only or STATES):
     z = os.path.join(work, st + '.zip')
     subprocess.run(['curl', '-s', '--retry', '4', '-o', z, URL.format(st)], check=True)
     with zipfile.ZipFile(z) as zf:

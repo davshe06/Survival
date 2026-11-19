@@ -1,4 +1,4 @@
-/* Offline Southeast map with GPS, waypoints, navigation, track recording, GPX import/export and optional saved topo tiles. */
+/* Offline Southeast + PA/NJ/NY map with GPS, waypoints, navigation, track recording, GPX import/export and optional saved topo tiles. */
 (function () {
   'use strict';
   const { route, setTitle, store, esc, toast, view, $ } = window.FG;
@@ -726,7 +726,7 @@
     const id = ++routeReq;
     return new Promise((res, rej) => {
       const states = statesFor(from, dest);
-      if (!states.length) return rej(new Error('Routing works inside the 12 Southeast states covered by the map'));
+      if (!states.length) return rej(new Error('Routing works inside the ' + SEIDX.states.length + ' states covered by the map'));
       routeWorker.onmessage = e => { if (e.data.id !== id) return; e.data.ok ? res(e.data) : rej(new Error(e.data.error)); };
       routeWorker.onerror = e => rej(new Error('Route engine failed to start' + (e.message ? ': ' + e.message : '')));
       routeWorker.postMessage({ id, mode, from: { lat: from.lat, lon: from.lon }, to: { lat: dest.lat, lon: dest.lon }, states, packBase: new URL('data/packs/', location.href).href });
@@ -1109,7 +1109,7 @@
   function showLayers() {
     const saved = store.get('savedAreas', []);
     openSheet(`<h3 style="margin:0 0 6px">Map layers</h3>
-      <p class="small muted">The built‑in Southeast map (states, counties, cities, highways, rivers, lakes, parks) is always available offline. Detailed topo maps can be added for areas you choose while you have internet.</p>
+      <p class="small muted">The built‑in map of the Southeast plus Pennsylvania, New Jersey and New York (states, counties, cities, highways, rivers, lakes, parks) is always available offline. Detailed topo maps can be added for areas you choose while you have internet.</p>
       <label class="f">Detailed background (needs saved tiles or internet)</label>
       <select class="inp" id="lyr"><option value="">None — built‑in offline map only</option>${Object.entries(TILE_SOURCES).filter(([, v]) => !v.overlay).map(([k, v]) => `<option value="${k}" ${tilesOn === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
       <label class="chk" style="padding-left:0"><input type="checkbox" id="grd" ${store.get('mapgrid', false) ? 'checked' : ''}><span class="t"><b>Lat/long grid</b></span></label>
@@ -1165,7 +1165,7 @@
       MD.airports.forEach(p => { if ((p.n + ' ' + p.c).toLowerCase().includes(q)) res.push({ n: '✈ ' + p.n, s: p.c, x: p.x, y: p.y, z: 12 }); });
       store.get('waypoints', []).forEach(w => { if (w.name.toLowerCase().includes(q)) res.push({ n: '📌 ' + w.name, s: 'Waypoint', x: w.lon, y: w.lat, z: 14 }); });
       res = res.slice(0, 30);
-      out.innerHTML = res.map((r, i) => `<a class="row" href="#" data-i="${i}"><span class="t"><b>${esc(r.n)}</b><small>${esc(r.s)}</small></span><span class="chev">›</span></a>`).join('') || '<p class="muted">No match in the built‑in map (it includes ~240 cities/towns, every county, and major airports).</p>';
+      out.innerHTML = res.map((r, i) => `<a class="row" href="#" data-i="${i}"><span class="t"><b>${esc(r.n)}</b><small>${esc(r.s)}</small></span><span class="chev">›</span></a>`).join('') || '<p class="muted">No match in the built‑in map (it includes ~350 cities/towns, every county, and major airports).</p>';
       out.querySelectorAll('[data-i]').forEach(a => a.onclick = e => { e.preventDefault(); const r = res[+a.dataset.i]; S.lat = r.y; S.lon = r.x; S.z = r.z; follow = false; $('#mLoc').classList.remove('on'); dirty = true; closeSheet(); if (r.pin) chooseNav({ lat: r.y, lon: r.x, name: r.s }); });
     };
   }
