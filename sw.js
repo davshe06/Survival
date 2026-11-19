@@ -1,11 +1,11 @@
 /* Service worker: caches the whole app for offline use, and caches map tiles as they are viewed/downloaded. */
-const VERSION = '2026.11.19-1';
+const VERSION = '2026.11.19-2';
 const APP_CACHE = 'fg-app-' + VERSION;
 const TILE_CACHE = 'fg-tiles-v1';
 const ASSETS = [
   './', 'index.html', 'manifest.webmanifest', 'css/styles.css',
   'js/app.js', 'js/geo.js', 'js/tools.js', 'js/map.js', 'js/router.js', 'js/extras.js', 'js/more.js', 'js/prep.js', 'js/vendor/tide-predictor.mjs',
-  'data/content-core.js', 'data/content-medical.js', 'data/content-dogs.js', 'data/content-food.js', 'data/content-tracks.js', 'js/knots-svg.js', 'data/content-skills.js', 'data/content-fix.js', 'data/gear.js', 'data/photos.js', 'data/photo-files.json', 'data/places.json', 'data/tides.json', 'data/map-se.js', 'data/water.json', 'data/se/index.json',
+  'data/content-core.js', 'data/content-medical.js', 'data/content-dogs.js', 'data/content-food.js', 'data/hunt-figs.js', 'data/content-hunt.js', 'data/content-tracks.js', 'js/knots-svg.js', 'data/content-skills.js', 'data/content-fix.js', 'data/gear.js', 'data/photos.js', 'data/photo-files.json', 'data/places.json', 'data/tides.json', 'data/map-se.js', 'data/water.json', 'data/se/index.json',
   ...['AL','AR','FL','GA','KY','LA','MS','NC','SC','TN','VA','WV'].map(c => 'data/se/' + c + '.json'),
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'
 ];

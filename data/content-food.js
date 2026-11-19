@@ -283,59 +283,6 @@ P('Lantana', 'Lantana camara', { id: 'Shrub with rough aromatic leaves and multi
 <p>The Southeast's warm winters make true root cellars harder; an insulated buried container (a clean plastic barrel or old chest freezer buried on its side in a north‑facing slope), a basement, or a crawlspace corner can work. A "clamp" — vegetables layered with straw and covered with soil — works for roots outdoors.</p>
 <h2>Evaporative cooling (zeer pot)</h2><p>Put a smaller clay pot inside a larger one, fill the gap with wet sand, cover the top with a wet cloth, set in shade with a breeze. Keeps vegetables 15–20°F cooler than air. Works best in dry air; still helpful in the Southeast. A wet towel draped over a crate in a breeze does similar.</p>` }
   ]
-},
-{
-  id: 'hunt', title: 'Fishing, Hunting & Trapping', icon: '🎣', color: '#6b8f9e',
-  blurb: 'Catching and processing fish and game',
-  intro: 'Fishing and hunting are regulated by each state (licenses, seasons, limits, legal methods). Many survival techniques — snares, trotlines, fish traps, night hunting — are illegal except in a true life‑threatening emergency. Know your state\'s rules.',
-  articles: [
-    { id: 'regs', title: 'Hunting, fishing & foraging rules by state', icon: '📜', sum: 'Licenses, seasons and who to ask — rules change every year', tags: ['license', 'regulations', 'seasons', 'wildlife agency', 'dnr', 'fishing license', 'hunting license', 'foraging rules', 'public land'], body: `
-<div class="box warn"><b class="lbl">Check before you hunt, fish or gather</b>Seasons, bag limits, legal methods and license rules change every year and differ by state, county and property. This app does not list them so it never shows outdated rules. Look them up (and save the PDF regulations digest to your phone's Files app) before a trip.</div>
-<div class="tbl"><table><tr><th>State</th><th>Wildlife agency (licenses & regulations)</th></tr>
-<tr><td>Alabama</td><td>Alabama DCNR Wildlife & Freshwater Fisheries — outdooralabama.com</td></tr>
-<tr><td>Arkansas</td><td>Arkansas Game & Fish Commission — agfc.com</td></tr>
-<tr><td>Florida</td><td>Florida Fish & Wildlife Conservation Commission — myfwc.com</td></tr>
-<tr><td>Georgia</td><td>Georgia DNR Wildlife Resources Division — georgiawildlife.com</td></tr>
-<tr><td>Kentucky</td><td>Kentucky Dept. of Fish & Wildlife Resources — fw.ky.gov</td></tr>
-<tr><td>Louisiana</td><td>Louisiana Dept. of Wildlife & Fisheries — wlf.louisiana.gov</td></tr>
-<tr><td>Mississippi</td><td>Mississippi Dept. of Wildlife, Fisheries & Parks — mdwfp.com</td></tr>
-<tr><td>North Carolina</td><td>NC Wildlife Resources Commission — ncwildlife.gov</td></tr>
-<tr><td>South Carolina</td><td>SC Dept. of Natural Resources — dnr.sc.gov</td></tr>
-<tr><td>Tennessee</td><td>Tennessee Wildlife Resources Agency — tn.gov/twra</td></tr>
-<tr><td>Virginia</td><td>Virginia Dept. of Wildlife Resources — dwr.virginia.gov</td></tr>
-<tr><td>West Virginia</td><td>WV Division of Natural Resources — wvdnr.gov</td></tr></table></div>
-<p>Most states sell licenses online and through their own free phone apps — buy before you go and keep a screenshot. Saltwater fishing often needs a separate license or free registry.</p>
-<h2>General rules of thumb</h2>
-<ul><li><b>Private land:</b> you need the landowner's permission to hunt, fish, trap or forage. Purple paint marks on trees/posts mean "No trespassing" in most Southeast states.</li>
-<li><b>National forests:</b> small amounts of berries, nuts and mushrooms for personal use are generally allowed; commercial gathering, digging plants (ginseng, ramps) and cutting live trees need a permit. Check the forest's rules.</li>
-<li><b>National parks:</b> most plant and animal gathering is prohibited; some parks allow limited fruit/nut picking for personal use. Hunting is generally not allowed in national parks.</li>
-<li><b>Wildlife Management Areas:</b> often need a WMA permit/stamp in addition to a license, and have their own dates.</li>
-<li><b>Protected species:</b> e.g. gopher tortoises, many turtles, ginseng without a permit, and migratory birds outside seasons are protected.</li>
-<li><b>True emergencies:</b> in a genuine life‑threatening situation, survival comes first — but document what you did and report it afterwards.</li></ul>` },
-    { id: 'fishing', title: 'Fishing for food', sum: 'Simple tackle, bait, where fish are, passive methods', tags: ['fishing', 'bait', 'hook', 'catfish', 'bream', 'bluegill', 'trotline', 'limb line', 'jug line', 'crawfish'], body: `
-<p>Fishing is the most reliable wild protein in the water‑rich Southeast. Bream (bluegill, sunfish), catfish, bass, crappie and, on the coast, redfish, trout, croaker and whiting are common.</p>
-<h2>Minimal kit</h2><p>Hooks (size 6–8 for bream, 1/0–3/0 for catfish/bass), 8–15 lb line, split shot sinkers, bobbers, a few soft plastic worms, a spinner or two. A "Yo‑Yo" auto fishing reel or a handline wrapped on a can or bottle works without a rod.</p>
-<h2>Bait</h2><ul><li>Earthworms (dig in moist soil, under logs), crickets, grasshoppers, grubs (rotten logs).</li><li>Catfish: chicken liver, cut fish, shrimp, hot dogs, soap (old trick), stink bait.</li><li>Small pieces of the first fish you catch (eyes, guts, strips of belly).</li><li>Coast: shrimp, fiddler crabs, cut mullet, sand fleas (mole crabs) dug in the surf.</li></ul>
-<h2>Where</h2><ul><li>Around cover: fallen trees, brush, docks, weed edges, deeper pools below riffles, creek mouths, bridges.</li><li>Early morning and evening; overcast days; before storms. Catfish feed well at night.</li><li>Summer heat: fish go deep or into shade.</li></ul>
-<h2>Passive methods (check legality)</h2><ul><li><b>Limb lines:</b> line with a baited hook tied to an overhanging branch so the bait sits just under water. Set several overnight for catfish.</li><li><b>Jug lines:</b> baited line hanging under a floating jug.</li><li><b>Trotlines:</b> a main line anchored across water with many short dropper lines and hooks.</li><li><b>Fish trap/weir:</b> a funnel of stones or sticks in a stream leading fish into a pen.</li><li>Crawfish: in ditches and creeks — catch by hand at night with a light, or with a trap/net baited with meat. Cook thoroughly.</li></ul>
-<h2>Cleaning fish</h2><ol class="steps"><li>Scale from tail to head with a knife back (or skin catfish: cut around the head, peel the skin with pliers).</li><li>Cut from the vent to the gills; remove guts. Remove gills.</li><li>Or fillet: cut behind the gills down to the spine, turn the blade and slide along the backbone to the tail.</li><li>Cook thoroughly. Eat within hours in heat, or keep on ice.</li></ol>
-<p>Check fish consumption advisories — some rivers and lakes have mercury or PCB warnings. Avoid shellfish from closed or polluted waters.</p>` },
-    { id: 'game', title: 'Small game & processing meat', sum: 'Squirrels, rabbits, field dressing deer, cleaning birds', tags: ['hunting', 'squirrel', 'rabbit', 'deer', 'field dressing', 'skinning', 'game', 'butchering', 'hog'], body: `
-<h2>Most available game</h2><p>Squirrels (very common, easiest), rabbits, deer, feral hogs (open season most of the year in many states), doves, turkey, ducks, frogs (gigging), turtles (check rules).</p>
-<h2>Cleaning a squirrel</h2><ol class="steps"><li>Cut through the tail bone from underneath without cutting the skin on top.</li><li>Step on the tail and pull the hind legs up — the skin peels toward the head. Then peel the "pants" off the legs.</li><li>Cut off head, feet and tail. Open the belly carefully (don't puncture intestines/bladder), remove guts, rinse.</li></ol>
-<h2>Rabbit</h2><p>Wear gloves (tularemia). Skin peels like a glove: pinch the back skin, cut a slit, and pull apart both ways. Gut it. <b>Don't eat a rabbit with white spots on the liver</b> — discard it. Rabbit alone is so lean it can't sustain you ("rabbit starvation") — eat fat from other sources.</p>
-<h2>Field dressing a deer or hog</h2><ol class="steps"><li>Make sure it's dead (touch the open eye with a stick from behind). Wear gloves.</li><li>Roll on its back. Cut a shallow incision from the pelvis to the breastbone, using two fingers to lift the skin away from guts as you cut.</li><li>Cut around the anus to free the colon; tie it off.</li><li>Cut the diaphragm, reach up and sever the windpipe and esophagus. Roll out the entrails.</li><li>Prop the cavity open to cool. Get the meat below 40°F within hours — the Southeast heat spoils meat fast. Quarter it and put it on ice in a cooler (drain water so meat doesn't sit in it).</li></ol>
-<p>Edible organs: heart, liver (check for spots/flukes), kidneys. Discard anything that smells bad or looks abnormal (abscesses, yellow‑green fluid). Don't eat deer brain or spinal cord (chronic wasting disease is present in AR, TN, MS, VA, KY, NC, LA, AL).</p>
-<h2>Birds</h2><p>Plucking is easier after dipping in 150°F water for 30–60 seconds. Or skin them. Remove the crop and guts.</p>` },
-    { id: 'traps', title: 'Emergency traps & snares', sum: 'Principles of trapping for a true survival emergency', tags: ['trap', 'snare', 'trapping', 'deadfall', 'emergency food'], body: `
-<div class="box warn"><b class="lbl">Legal note</b>Snares and deadfalls are illegal for most people outside licensed trapping seasons, and can catch pets or protected animals. Use only in genuine life‑or‑death situations. Check traps often to avoid waste and suffering.</div>
-<h2>Trapping principles</h2><ul><li>Traps work while you rest — set many (10+), because most catch nothing.</li><li>Place on active trails: look for tracks, droppings, chewed plants, burrows, and natural funnels (between rocks, under logs, along stream banks).</li><li>Disturb the area as little as possible; mask your scent with mud or smoke.</li><li>Check at dawn and dusk.</li></ul>
-<h2>Simple snare</h2><p>A loop of thin wire (or strong cord) about fist‑size for rabbits, hung 3–4 in above the ground across a trail and anchored firmly to a stake or sapling. The loop should close when an animal pushes through. Squirrel "pole snares" — a pole leaned against a tree with several small loops along it — can catch several squirrels.</p>
-<h2>Fish & crawfish traps</h2><p>A funnel trap made from a plastic bottle (cut off the top, invert it into the bottom part) baited with food catches minnows and crawfish — often legal with a fishing license; check state rules.</p>` },
-    { id: 'insects', title: 'Insects & other emergency protein', sum: 'Grasshoppers, grubs, crawfish, frogs, snails', tags: ['insects', 'grasshopper', 'grubs', 'termites', 'frogs', 'snails', 'emergency protein'], body: `
-<ul><li><b>Grasshoppers, crickets, katydids:</b> remove legs and wings, roast or fry. Always cook (parasites).</li><li><b>Grubs and beetle larvae</b> (in rotten logs): cook.</li><li><b>Termites and ants</b> (not fire ants): roast.</li><li><b>Earthworms:</b> soak in water to purge dirt, then cook.</li><li><b>Crawfish:</b> boil until red and shells are hard.</li><li><b>Frogs:</b> bullfrog legs — skin and cook. Avoid toads (warty skin, toxic glands).</li><li><b>Snails:</b> cook thoroughly (rat lungworm parasite in the South — never eat raw snails or slugs).</li></ul>
-<p>Avoid: caterpillars (many toxic/stinging), brightly colored insects, anything that stings or smells foul, flies, ticks, mosquitoes, and dead insects you didn't kill.</p>` }
-  ]
 }
   );
 })();
