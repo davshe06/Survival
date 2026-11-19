@@ -1,5 +1,5 @@
 /* Service worker: caches the whole app for offline use, and caches map tiles as they are viewed/downloaded. */
-const VERSION = '2026.11.19-2';
+const VERSION = '2026.11.19-3';
 const APP_CACHE = 'fg-app-' + VERSION;
 const TILE_CACHE = 'fg-tiles-v1';
 const ASSETS = [
