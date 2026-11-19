@@ -349,3 +349,4 @@ figure.photo figcaption { font-size: .72rem; color: var(--muted); margin-top: 3p
 }
 .knotsvg.trk { max-height: 150px; width: auto; max-width: 100%; margin: 6px auto; }
 @media print { .toast, .strobe, .phrasefull { display: none !important; } }
+.knotsvg.hfig { max-width: 520px; }
