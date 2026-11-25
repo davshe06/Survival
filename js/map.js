@@ -1303,6 +1303,8 @@
     try { const r = await fetch(addrURL(code), { cache: 'reload' }); if (!r.ok) throw 0; const c = await caches.open(PACK_CACHE); await c.put(addrURL(code), r); ADDRHAVE[code] = true; if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); return true; }
     catch (e) { toast('Address download failed — try again with a better connection'); return false; }
   }
+  const DIRS = new Set(['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']);
+  const prettySt = t => t.split(' ').map(w => DIRS.has(w.toLowerCase()) ? w.toUpperCase() : /^\d+(st|nd|rd|th)$/i.test(w) ? w.toLowerCase() : /^(us|sr|cr|fm|i)-?\d/i.test(w) ? w.toUpperCase() : w).join(' ');
   function streetPts(flat) { const o = []; let n = 0, x = 0, y = 0; for (let i = 0; i < flat.length; i += 3) { n += flat[i]; x += flat[i + 1]; y += flat[i + 2]; o.push([n, x / 1e5, y / 1e5]); } return o; }
   function placeNumber(pts, N) { // interpolate a house number along the street (same side of the street when possible)
     const side = pts.filter(p => p[0] % 2 === N % 2), use = side.length >= 2 || (side.length === 1 && side[0][0] === N) ? side : pts;
@@ -1332,7 +1334,7 @@
           const pts = streetPts(flat); let loc;
           if (N != null) { loc = placeNumber(pts, N); if (!loc.exact && loc.off > 200) continue; if (loc.exact) score += 3; }
           else { const mid = pts[pts.length >> 1]; loc = { lon: mid[1], lat: mid[2], exact: true }; }
-          out.push({ n: (N != null ? N + ' ' : '') + name, s: [city, code + (z ? ' ' + z : '')].filter(Boolean).join(', ') + (N != null && !loc.exact ? ' · near the end of the numbered range' : ''), x: loc.lon, y: loc.lat, z: 17, pin: 1, score, nav: true });
+          out.push({ n: (N != null ? N + ' ' : '') + prettySt(name), s: [city, code + (z ? ' ' + z : '')].filter(Boolean).join(', ') + (N != null && !loc.exact ? ' · near the end of the numbered range' : ''), x: loc.lon, y: loc.lat, z: 17, pin: 1, score, nav: true });
         }
         break;
       }
