@@ -6,8 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const dir = process.argv[2];
 const topojson = require(path.resolve(dir, 'topojson-client-3.1.0/package/dist/topojson-client.min.js'));
-const BB = { w: -95.2, e: -71.2, s: 23.8, n: 45.6 };
-const SE_FIPS = { '01': 'AL', '05': 'AR', '12': 'FL', '13': 'GA', '21': 'KY', '22': 'LA', '28': 'MS', '37': 'NC', '45': 'SC', '47': 'TN', '51': 'VA', '54': 'WV', '42': 'PA', '34': 'NJ', '36': 'NY' };
+const BB = { w: -95.2, e: -66.5, s: 23.8, n: 47.8 };
+const SE_FIPS = { '01': 'AL', '05': 'AR', '12': 'FL', '13': 'GA', '21': 'KY', '22': 'LA', '28': 'MS', '37': 'NC', '45': 'SC', '47': 'TN', '51': 'VA', '54': 'WV', '42': 'PA', '34': 'NJ', '36': 'NY', '09': 'CT', '44': 'RI', '25': 'MA', '50': 'VT', '33': 'NH', '23': 'ME', '24': 'MD', '10': 'DE', '11': 'DC' };
 const load = f => JSON.parse(fs.readFileSync(path.join(dir, f)));
 
 function inBB(p) { return p[0] > BB.w && p[0] < BB.e && p[1] > BB.s && p[1] < BB.n; }
@@ -77,9 +77,11 @@ function lineLayer(feats, tol, propFn) {
 const data = { bbox: BB, built: new Date().toISOString().slice(0, 10) };
 
 // States (land) – US states that touch the box
-const st = load('ne_10m_admin_1_states_provinces.geojson').features.filter(f => f.properties.adm0_a3 === 'USA');
+// US states plus neighbouring Canadian provinces (so border crossings have context)
+const st = load('ne_10m_admin_1_states_provinces.geojson').features.filter(f => f.properties.adm0_a3 === 'USA' || f.properties.adm0_a3 === 'CAN');
 data.states = polyLayer(st, 0.004, f => f.properties.postal);
-data.stateLabels = st.filter(f => Object.values(SE_FIPS).includes(f.properties.postal)).map(f => ({ n: f.properties.name, a: f.properties.postal, x: +f.properties.longitude.toFixed(3), y: +f.properties.latitude.toFixed(3) }));
+data.stateLabels = st.filter(f => Object.values(SE_FIPS).includes(f.properties.postal) || (f.properties.adm0_a3 === 'CAN' && ['ON', 'QC', 'NB'].includes(f.properties.postal)))  .map(f => { const ca = { ON: [-77.6, 44.75], QC: [-71.9, 46.3], NB: [-66.9, 46.85] }[f.properties.adm0_a3 === 'CAN' && f.properties.postal];
+    return { n: f.properties.name + (ca ? ' (Canada)' : ''), a: f.properties.postal, x: ca ? ca[0] : +f.properties.longitude.toFixed(3), y: ca ? ca[1] : +f.properties.latitude.toFixed(3) }; });
 
 // Counties from us-atlas topojson
 const topo = load('us-atlas-3.0.1/package/counties-10m.json');
@@ -96,7 +98,7 @@ data.coast = lineLayer(load('ne_10m_coastline.geojson').features, 0.002);
 data.lakes = polyLayer([...load('ne_10m_lakes.geojson').features, ...load('ne_10m_lakes_north_america.geojson').features], 0.002, f => f.properties.name || undefined);
 const rivNames = f => ({ n: f.properties.name || undefined, k: f.properties.scalerank <= 6 ? 1 : 2 });
 data.rivers = lineLayer([...load('ne_10m_rivers_lake_centerlines.geojson').features, ...load('ne_10m_rivers_north_america.geojson').features].filter(f => f.properties.featurecla !== 'Lake Centerline'), 0.002, rivNames);
-const roads = load('ne_10m_roads.geojson').features.filter(f => f.properties.sov_a3 === 'USA' && f.properties.type !== 'Ferry Route');
+const roads = load('ne_10m_roads.geojson').features.filter(f => (f.properties.sov_a3 === 'USA' || f.properties.sov_a3 === 'CAN') && f.properties.type !== 'Ferry Route');
 data.roads = lineLayer(roads, 0.0015, f => {
   const p = f.properties; const k = p.expressway === 1 || p.type === 'Major Highway' ? 1 : 2;
   let n = p.name ? String(p.name) : undefined;
@@ -105,7 +107,7 @@ data.roads = lineLayer(roads, 0.0015, f => {
 });
 data.parks = polyLayer(load('ne_10m_parks_and_protected_lands_area.geojson').features, 0.002, f => f.properties.name || f.properties.unit_name);
 data.urban = polyLayer(load('ne_10m_urban_areas.geojson').features, 0.003, null);
-data.places = load('ne_10m_populated_places.geojson').features.filter(f => f.properties.ADM0_A3 === 'USA' && inBB([f.properties.LONGITUDE, f.properties.LATITUDE]))
+data.places = load('ne_10m_populated_places.geojson').features.filter(f => (f.properties.ADM0_A3 === 'USA' || f.properties.ADM0_A3 === 'CAN') && inBB([f.properties.LONGITUDE, f.properties.LATITUDE]))
   .map(f => ({ n: f.properties.NAME, s: f.properties.ADM1NAME, p: f.properties.POP_MAX, x: +f.properties.LONGITUDE.toFixed(4), y: +f.properties.LATITUDE.toFixed(4) }))
   .sort((a, b) => b.p - a.p);
 data.airports = load('ne_10m_airports.geojson').features.filter(f => f.geometry && inBB(f.geometry.coordinates))

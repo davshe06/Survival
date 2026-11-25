@@ -150,8 +150,8 @@
     const nextNew = new Date(+date + (syn - age) * 864e5);
     return { age, illum, name: names[i], icon: icons[i], nextFull, nextNew };
   };
-  // Approximate magnetic declination for the U.S. Southeast and PA/NJ/NY (~2025–2027 epoch, ±1–2°). Negative = West.
-  Geo.declination = (lat, lon) => -55.12 - 0.6671 * lon - 0.1906 * lat;
+  // Approximate magnetic declination for the eastern U.S. (~2025–2027 epoch, about ±1°). Negative = West.
+  Geo.declination = (lat, lon) => -82.96 - 0.9986 * lon + 0.5655 * lat + 0.008907 * lon * lat; // fitted to WMM2025, Maine to the Gulf (±0.7°)
 
   window.Geo = Geo;
 })();

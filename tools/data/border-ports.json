@@ -1,0 +1,533 @@
+[
+[
+"NY",
+"Champlain (I-87)",
+"Saint-Bernard-de-Lacolle, QC (A-15)",
+45.008,
+-73.453,
+1,
+[
+"I-87"
+]
+],
+[
+"NY",
+"Rouses Point (US-11)",
+"Lacolle, QC (Rte 223)",
+45.0105,
+-73.362,
+0,
+[
+"US-11"
+]
+],
+[
+"NY",
+"Overton Corners (NY-276)",
+"Lacolle, QC (Rte 221)",
+45.008,
+-73.41,
+0,
+[
+"SR-276"
+]
+],
+[
+"NY",
+"Mooers (NY-22)",
+"Hemmingford, QC (Rte 219)",
+45.0065,
+-73.588,
+0,
+[
+"SR-22"
+]
+],
+[
+"NY",
+"Churubusco (NY-189)",
+"Franklin Centre, QC (Rte 209)",
+45.006,
+-73.933,
+0,
+[
+"SR-189"
+]
+],
+[
+"NY",
+"Chateaugay (NY-374)",
+"Herdman, QC (Rte 138)",
+45.005,
+-74.095,
+0,
+[
+"SR-374"
+]
+],
+[
+"NY",
+"Trout River (NY-30)",
+"Huntingdon, QC (Rte 138)",
+44.996,
+-74.302,
+0,
+[
+"SR-30"
+]
+],
+[
+"NY",
+"Fort Covington (NY-37C)",
+"Dundee, QC (Rte 132)",
+45.003,
+-74.498,
+0,
+[
+"37C",
+"SR-37"
+]
+],
+[
+"NY",
+"Massena – Seaway International Bridge (NY-37)",
+"Cornwall, ON",
+44.992,
+-74.738,
+1,
+[
+"SR-37",
+"Seaway"
+]
+],
+[
+"NY",
+"Ogdensburg – Prescott Bridge",
+"Johnstown / Prescott, ON (Hwy 16)",
+44.733,
+-75.458,
+1,
+[
+"SR-812",
+"Bridge"
+]
+],
+[
+"NY",
+"Alexandria Bay – Thousand Islands Bridge (I-81)",
+"Lansdowne, ON (Hwy 137)",
+44.347,
+-75.982,
+1,
+[
+"I-81"
+]
+],
+[
+"NY",
+"Lewiston – Queenston Bridge (I-190)",
+"Queenston, ON (Hwy 405)",
+43.153,
+-79.044,
+1,
+[
+"I-190"
+]
+],
+[
+"NY",
+"Niagara Falls – Rainbow Bridge",
+"Niagara Falls, ON",
+43.0905,
+-79.068,
+1,
+[
+"Rainbow",
+"US-62"
+]
+],
+[
+"NY",
+"Niagara Falls – Whirlpool Bridge (NEXUS only)",
+"Niagara Falls, ON",
+43.1085,
+-79.0585,
+0,
+[
+"Whirlpool",
+"SR-182"
+]
+],
+[
+"NY",
+"Buffalo – Peace Bridge (I-190)",
+"Fort Erie, ON (QEW)",
+42.907,
+-78.905,
+1,
+[
+"Peace"
+]
+],
+[
+"VT",
+"Highgate Springs (I-89)",
+"Saint-Armand / Philipsburg, QC (A-35)",
+45.015,
+-73.085,
+1,
+[
+"I-89"
+]
+],
+[
+"VT",
+"Alburgh (US-2 / VT-225)",
+"Noyan, QC (Rte 225)",
+45.011,
+-73.244,
+0,
+[
+"SR-225"
+]
+],
+[
+"VT",
+"Alburgh Springs (VT-78)",
+"Clarenceville, QC (Rte 202)",
+45.01,
+-73.171,
+0,
+[
+"Alburgh Springs",
+"Springs"
+]
+],
+[
+"VT",
+"Morses Line (VT-235)",
+"Saint-Armand, QC (Rte 235)",
+45.014,
+-72.979,
+0,
+[
+"SR-235",
+"Morses"
+]
+],
+[
+"VT",
+"West Berkshire (VT-108)",
+"Frelighsburg, QC (Rte 237)",
+45.014,
+-72.85,
+0,
+[
+"SR-108"
+]
+],
+[
+"VT",
+"Richford (VT-139)",
+"Abercorn, QC (Rte 139)",
+45.011,
+-72.588,
+0,
+[
+"SR-139"
+]
+],
+[
+"VT",
+"North Troy (VT-243)",
+"Highwater, QC (Rte 243)",
+45.009,
+-72.404,
+0,
+[
+"SR-243"
+]
+],
+[
+"VT",
+"Derby Line (I-91)",
+"Stanstead, QC (A-55)",
+45.0065,
+-72.104,
+1,
+[
+"I-91"
+]
+],
+[
+"VT",
+"Derby Line (US-5 Main St)",
+"Stanstead, QC (Rte 143)",
+45.0055,
+-72.099,
+0,
+[
+"US-5",
+"Main"
+]
+],
+[
+"VT",
+"Beebe Plain (VT-247)",
+"Beebe, QC",
+45.006,
+-72.139,
+0,
+[
+"Beebe"
+]
+],
+[
+"VT",
+"Norton (VT-114)",
+"Stanhope, QC (Rte 147)",
+45.009,
+-71.793,
+0,
+[
+"SR-114"
+]
+],
+[
+"VT",
+"Canaan (VT-141)",
+"Hereford, QC (Rte 141)",
+45.015,
+-71.53,
+0,
+[
+"SR-141"
+]
+],
+[
+"VT",
+"Beecher Falls (VT-253)",
+"East Hereford, QC (Rte 253)",
+45.0155,
+-71.509,
+0,
+[
+"SR-253"
+]
+],
+[
+"NH",
+"Pittsburg (US-3)",
+"Chartierville, QC (Rte 257)",
+45.2505,
+-71.489,
+0,
+[
+"US-3"
+]
+],
+[
+"ME",
+"Coburn Gore (ME-27)",
+"Woburn, QC (Rte 161)",
+45.4105,
+-70.813,
+0,
+[
+"SR-27"
+]
+],
+[
+"ME",
+"Jackman (US-201)",
+"Armstrong, QC (Rte 173)",
+45.802,
+-70.397,
+0,
+[
+"US-201"
+]
+],
+[
+"ME",
+"Estcourt Station",
+"Pohénégamook, QC",
+47.458,
+-69.224,
+0,
+[
+"Estcourt"
+]
+],
+[
+"ME",
+"Fort Kent (ME-11 bridge)",
+"Clair, NB",
+47.2525,
+-68.5915,
+0,
+[
+"US-1",
+"SR-11",
+"Bridge"
+]
+],
+[
+"ME",
+"Madawaska (US-1 bridge)",
+"Edmundston, NB",
+47.3575,
+-68.329,
+1,
+[
+"Bridge"
+]
+],
+[
+"ME",
+"Van Buren (bridge)",
+"Saint-Léonard, NB",
+47.158,
+-67.934,
+0,
+[
+"Bridge",
+"US-1"
+]
+],
+[
+"ME",
+"Hamlin (bridge)",
+"Grand Falls, NB",
+47.075,
+-67.835,
+0,
+[
+"Bridge"
+]
+],
+[
+"ME",
+"Limestone",
+"Gillespie Portage, NB",
+46.922,
+-67.7895,
+0,
+[
+"SR-229"
+]
+],
+[
+"ME",
+"Fort Fairfield (ME-161)",
+"Perth-Andover, NB",
+46.7655,
+-67.7895,
+0,
+[
+"SR-161"
+]
+],
+[
+"ME",
+"Bridgewater (US-1)",
+"Centreville, NB",
+46.422,
+-67.786,
+0,
+[
+"US-1",
+"Boundary"
+]
+],
+[
+"ME",
+"Houlton (I-95)",
+"Woodstock, NB (Route 95)",
+46.143,
+-67.782,
+1,
+[
+"I-95"
+]
+],
+[
+"ME",
+"Orient",
+"Fosterville, NB",
+45.815,
+-67.793,
+0,
+[
+"Boundary"
+]
+],
+[
+"ME",
+"Forest City",
+"Forest City, NB",
+45.655,
+-67.73,
+0,
+[
+"Forest"
+]
+],
+[
+"ME",
+"Vanceboro",
+"St. Croix, NB",
+45.569,
+-67.429,
+0,
+[
+"SR-6"
+]
+],
+[
+"ME",
+"Calais – International Avenue (US-1)",
+"St. Stephen, NB (Route 1)",
+45.1625,
+-67.306,
+1,
+[
+"International",
+"US-1"
+]
+],
+[
+"ME",
+"Calais – Ferry Point Bridge",
+"St. Stephen, NB",
+45.188,
+-67.283,
+0,
+[
+"Main",
+"Union"
+]
+],
+[
+"ME",
+"Calais – Milltown Bridge",
+"St. Stephen, NB",
+45.1695,
+-67.2985,
+0,
+[
+"Milltown"
+]
+],
+[
+"ME",
+"Lubec – FDR Memorial Bridge",
+"Campobello Island, NB",
+44.858,
+-66.9845,
+0,
+[
+"SR-189"
+]
+]
+]

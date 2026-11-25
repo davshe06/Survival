@@ -13,7 +13,9 @@ import shapefile  # pip install pyshp
 
 STATES = {'AL': 'Alabama', 'AR': 'Arkansas', 'FL': 'Florida', 'GA': 'Georgia', 'KY': 'Kentucky', 'LA': 'Louisiana',
           'MS': 'Mississippi', 'NC': 'North_Carolina', 'SC': 'South_Carolina', 'TN': 'Tennessee', 'VA': 'Virginia', 'WV': 'West_Virginia',
-          'PA': 'Pennsylvania', 'NJ': 'New_Jersey', 'NY': 'New_York'}
+          'PA': 'Pennsylvania', 'NJ': 'New_Jersey', 'NY': 'New_York',
+          'CT': 'Connecticut', 'RI': 'Rhode_Island', 'MA': 'Massachusetts', 'VT': 'Vermont', 'NH': 'New_Hampshire', 'ME': 'Maine',
+          'MD': 'Maryland', 'DE': 'Delaware', 'DC': 'District_of_Columbia'}
 URL = 'https://prd-tnm.s3.amazonaws.com/StagedProducts/Tran/Shape/TRAN_{}_State_Shape.zip'
 SCALE = 1e5  # 1e-5 degree ≈ 1.1 m
 FS_NAME = re.compile(r'^(forest|fs|fr|nfsr|usfs|fdr)\s*(rd|road|route)?\s*[-#]?\s*\d|forest\s*service|national\s*forest|\b(fs|fsr|nfsr|usfs)\s*(rd|road)?\s*\d', re.I)
