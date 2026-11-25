@@ -1,4 +1,4 @@
-/* Offline Southeast + PA/NJ/NY map with GPS, waypoints, navigation, track recording, GPX import/export and optional saved topo tiles. */
+/* Offline eastern U.S. map (Maine to the Gulf) with GPS, waypoints, navigation, track recording, GPX import/export and optional saved topo tiles. */
 (function () {
   'use strict';
   const { route, setTitle, store, esc, toast, view, $ } = window.FG;
@@ -534,14 +534,17 @@
 
   // ---------- Places: hospitals, fire/EMS, police, ranger stations, campgrounds, trailheads (+ imported repeaters) ----------
   let PLACES = null;
-  const PL_ICON = { h: ['H', '#e2574c'], f: ['F', '#ff8a3d'], p: ['P', '#4a7bd4'], r: ['R', '#3f9a4a'], v: ['i', '#2a9fb0'], c: ['⛺', '#7a8f3a'], t: ['T', '#a0703c'], x: ['📡', '#8e44ff'] };
-  const PL_NAME = { h: 'Hospital', f: 'Fire / EMS station', p: 'Police / sheriff', r: 'Ranger station / park office', v: 'Visitor center', c: 'Campground / recreation area', t: 'Trailhead', x: 'Radio repeater' };
+  const PL_ICON = { h: ['H', '#e2574c'], f: ['F', '#ff8a3d'], p: ['P', '#4a7bd4'], r: ['R', '#3f9a4a'], v: ['i', '#2a9fb0'], c: ['⛺', '#7a8f3a'], t: ['T', '#a0703c'], x: ['📡', '#8e44ff'], b: ['🛂', '#c2185b'] };
+  const PL_NAME = { h: 'Hospital', f: 'Fire / EMS station', p: 'Police / sheriff', r: 'Ranger station / park office', v: 'Visitor center', c: 'Campground / recreation area', t: 'Trailhead', x: 'Radio repeater', b: 'Border crossing to Canada' };
   function ensurePlaces() {
     if (PLACES || loadingSet.has('places')) return;
     loadingSet.add('places');
     loadJSON('data/places.json').then(d => {
       PLACES = d.pts.map(([t, n, x, y, a]) => ({ t, n, a, lat: y / d.scale, lon: x / d.scale, X: mx(x / d.scale), Y: my(y / d.scale) }));
       addRepeaterPlaces(); dirty = true;
+      loadJSON('data/border.json').then(b => { // US–Canada ports of entry, listed first so they're never hidden by decluttering
+        PLACES = b.ports.map(o => ({ t: 'b', n: o.n, a: '→ ' + o.ca, ca: o.ca, road: o.road, major: o.m, st: o.s, lat: o.lat, lon: o.lon, X: mx(o.lon), Y: my(o.lat) })).concat(PLACES); dirty = true;
+      }).catch(() => { });
     }).catch(() => loadingSet.delete('places'));
   }
   function addRepeaterPlaces() {
@@ -554,8 +557,8 @@
     const z = S.z, out = [], cell = z < 8 ? 36 : z < 11 ? 24 : 0, used = new Set(); // declutter when zoomed out
     for (const p of PLACES) {
       if (p.X < vb[0] || p.X > vb[2] || p.Y < vb[1] || p.Y > vb[3]) continue;
-      if (z < 9 && p.t !== 'h') continue; if (z < 10.5 && 'ctvx'.includes(p.t)) continue;
-      const [x, y] = toScreen(p.X, p.Y), [ch, col] = PL_ICON[p.t], r = p.t === 'h' ? 9 : 7.5;
+      if (z < 9 && p.t !== 'h' && p.t !== 'b') continue; if (z < 10.5 && 'ctvx'.includes(p.t)) continue;
+      const [x, y] = toScreen(p.X, p.Y), [ch, col] = PL_ICON[p.t], r = p.t === 'h' || p.t === 'b' ? 9 : 7.5;
       if (cell) { const key = Math.floor(x / cell) + ',' + Math.floor(y / cell); if (used.has(key)) continue; used.add(key); }
       ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - r, y - r, r * 2, r * 2, 3) : ctx.rect(x - r, y - r, r * 2, r * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff'; ctx.stroke();
       ctx.fillStyle = '#fff'; ctx.font = '700 ' + (r * 1.3) + 'px ' + colors.font; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ch, x, y + 0.5); ctx.textAlign = 'left';
@@ -574,6 +577,7 @@
     const u = window.FG.units();
     openSheet(`<h3 style="margin:0 0 4px">${esc(p.n)}</h3><div class="small muted">${PL_NAME[p.t]}${p.a ? ' · ' + esc(p.a) : ''}</div>
       ${pos ? `<p><b>${Geo.fmtDist(Geo.dist(pos, p), u)}</b> at ${Math.round(Geo.bearing(pos, p))}° ${Geo.cardinal(Geo.bearing(pos, p))}</p>` : ''}
+      ${p.t === 'b' ? `<p class="small">${p.major ? '🕐 Major crossing, normally open 24 hours. ' : '🕐 Smaller crossing: may close at night or on holidays. '}Check hours and wait times at cbp.gov (U.S.) and cbsa-asfc.gc.ca (Canada) before you go.</p><p class="small muted">Location from U.S. road data where the road meets the border (within a few hundred yards). <a href="#/a/navigation/canada">Crossing into Canada: documents, firearms, pets ›</a></p>` : ''}
       ${p.t === 'h' ? '<div class="box warn small">Call 911 first if you can — an ambulance can start treatment on the way. Not every hospital has a full emergency department; this list comes from USGS public data.</div>' : ''}
       <div class="btnrow"><button class="btn pri" id="plGo">Navigate here</button><button class="btn" id="plSave">Save as waypoint</button></div>`);
     $('#plGo').onclick = () => chooseNav({ lat: p.lat, lon: p.lon, name: p.n });
@@ -585,7 +589,7 @@
     const groups = ['h', 'f', 'p', 'r', 'c', 't', 'x'].map(t => [t, PLACES.filter(p => p.t === t).map(p => [Geo.dist(from, p), p]).sort((a, b) => a[0] - b[0]).slice(0, t === 'h' ? 5 : 3)]).filter(([, l]) => l.length);
     const flat = [];
     openSheet(`<h3 style="margin:0">🏥 Nearest help & places</h3><p class="small muted">From ${pos ? 'your GPS position' : 'the map center'}.</p>
-      ${groups.map(([t, l]) => `<h3>${PL_NAME[t]}s</h3><div class="list">${l.map(([d, p]) => { flat.push(p); return `<a class="row" href="#" data-pl="${flat.length - 1}"><span class="i" style="color:${PL_ICON[t][1]}">■</span><span class="t"><b>${esc(p.n)}</b><small>${Geo.fmtDist(d, u)} · ${Math.round(Geo.bearing(from, p))}° ${Geo.cardinal(Geo.bearing(from, p))}${p.a ? ' · ' + esc(p.a) : ''}</small></span><span class="chev">›</span></a>`; }).join('')}</div>`).join('')}`);
+      ${groups.map(([t, l]) => `<h3>${t === 'b' ? 'Border crossings to Canada' : PL_NAME[t] + 's'}</h3><div class="list">${l.map(([d, p]) => { flat.push(p); return `<a class="row" href="#" data-pl="${flat.length - 1}"><span class="i" style="color:${PL_ICON[t][1]}">■</span><span class="t"><b>${esc(p.n)}</b><small>${Geo.fmtDist(d, u)} · ${Math.round(Geo.bearing(from, p))}° ${Geo.cardinal(Geo.bearing(from, p))}${p.a ? ' · ' + esc(p.a) : ''}</small></span><span class="chev">›</span></a>`; }).join('')}</div>`).join('')}`);
     document.querySelectorAll('[data-pl]').forEach(a => a.onclick = e => { e.preventDefault(); const p = flat[+a.dataset.pl]; S.lat = p.lat; S.lon = p.lon; if (S.z < 13) S.z = 13; follow = false; const b = $('#mLoc'); if (b) b.classList.remove('on'); dirty = true; showPlace(p); });
   }
 
@@ -693,7 +697,7 @@
         trails: z < 8.5 ? 'Zoom in to see hiking trails (pink dashes)' : 'Pink dashes = hiking trails, orange = OHV/motorized trails',
         forest: z < 8.5 ? 'Zoom in to see forest service & 4WD roads' : 'Orange dashes = forest service roads, tan = 4WD/unpaved tracks',
         contours: navigator.onLine ? (z < 11.5 ? 'Zoom in to see contour lines' : 'Contour lines are drawn from terrain data. Save terrain for offline in Layers ›') : 'Contours need saved terrain data for this area — download it in Layers while online',
-        places: 'H = hospital, F = fire/EMS, P = police, R = ranger station; campgrounds & trailheads when zoomed in. Tap “Nearest help”.',
+        places: 'H = hospital, F = fire/EMS, P = police, R = ranger station, 🛂 = border crossing to Canada; campgrounds & trailheads when zoomed in. Tap “Nearest help”.',
         roads: 'Highways & secondary roads are built in. For every local road, download your state in Layers ›'
       };
       toast(hints[k]);
@@ -1109,7 +1113,7 @@
   function showLayers() {
     const saved = store.get('savedAreas', []);
     openSheet(`<h3 style="margin:0 0 6px">Map layers</h3>
-      <p class="small muted">The built‑in map of the Southeast plus Pennsylvania, New Jersey and New York (states, counties, cities, highways, rivers, lakes, parks) is always available offline. Detailed topo maps can be added for areas you choose while you have internet.</p>
+      <p class="small muted">The built‑in map of the eastern U.S. from Maine to the Gulf, plus border crossings into Canada (states, counties, cities, highways, rivers, lakes, parks) is always available offline. Detailed topo maps can be added for areas you choose while you have internet.</p>
       <label class="f">Detailed background (needs saved tiles or internet)</label>
       <select class="inp" id="lyr"><option value="">None — built‑in offline map only</option>${Object.entries(TILE_SOURCES).filter(([, v]) => !v.overlay).map(([k, v]) => `<option value="${k}" ${tilesOn === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
       <label class="chk" style="padding-left:0"><input type="checkbox" id="grd" ${store.get('mapgrid', false) ? 'checked' : ''}><span class="t"><b>Lat/long grid</b></span></label>
@@ -1165,7 +1169,7 @@
       MD.airports.forEach(p => { if ((p.n + ' ' + p.c).toLowerCase().includes(q)) res.push({ n: '✈ ' + p.n, s: p.c, x: p.x, y: p.y, z: 12 }); });
       store.get('waypoints', []).forEach(w => { if (w.name.toLowerCase().includes(q)) res.push({ n: '📌 ' + w.name, s: 'Waypoint', x: w.lon, y: w.lat, z: 14 }); });
       res = res.slice(0, 30);
-      out.innerHTML = res.map((r, i) => `<a class="row" href="#" data-i="${i}"><span class="t"><b>${esc(r.n)}</b><small>${esc(r.s)}</small></span><span class="chev">›</span></a>`).join('') || '<p class="muted">No match in the built‑in map (it includes ~350 cities/towns, every county, and major airports).</p>';
+      out.innerHTML = res.map((r, i) => `<a class="row" href="#" data-i="${i}"><span class="t"><b>${esc(r.n)}</b><small>${esc(r.s)}</small></span><span class="chev">›</span></a>`).join('') || '<p class="muted">No match in the built‑in map (it includes ~400 cities/towns, every county, and major airports).</p>';
       out.querySelectorAll('[data-i]').forEach(a => a.onclick = e => { e.preventDefault(); const r = res[+a.dataset.i]; S.lat = r.y; S.lon = r.x; S.z = r.z; follow = false; $('#mLoc').classList.remove('on'); dirty = true; closeSheet(); if (r.pin) chooseNav({ lat: r.y, lon: r.x, name: r.s }); });
     };
   }

@@ -8,7 +8,7 @@
 const fs = require('fs'), path = require('path');
 const [tranDir, gnisArg, ...only] = process.argv.slice(2); const gnisFile = gnisArg === '-' ? null : gnisArg;
 const root = path.join(__dirname, '..');
-const NAMES = { AL: 'Alabama', AR: 'Arkansas', FL: 'Florida', GA: 'Georgia', KY: 'Kentucky', LA: 'Louisiana', MS: 'Mississippi', NC: 'North Carolina', SC: 'South Carolina', TN: 'Tennessee', VA: 'Virginia', WV: 'West Virginia', PA: 'Pennsylvania', NJ: 'New Jersey', NY: 'New York' };
+const NAMES = { AL: 'Alabama', AR: 'Arkansas', FL: 'Florida', GA: 'Georgia', KY: 'Kentucky', LA: 'Louisiana', MS: 'Mississippi', NC: 'North Carolina', SC: 'South Carolina', TN: 'Tennessee', VA: 'Virginia', WV: 'West Virginia', PA: 'Pennsylvania', NJ: 'New Jersey', NY: 'New York', CT: 'Connecticut', RI: 'Rhode Island', MA: 'Massachusetts', VT: 'Vermont', NH: 'New Hampshire', ME: 'Maine', MD: 'Maryland', DE: 'Delaware', DC: 'Washington, DC' };
 fs.mkdirSync(path.join(root, 'data/se'), { recursive: true });
 fs.mkdirSync(path.join(root, 'data/packs'), { recursive: true });
 

@@ -11,7 +11,7 @@
 
   TOOL_LIST.unshift(
     { id: 'share', icon: '📲', title: 'Text my location', sum: 'Send your GPS position by text to 911 or a contact', k: 'sos text sms share location 911 help send coordinates' },
-    { id: 'tides', icon: '🌊', title: 'Tides', sum: 'High & low tides for 2,100+ coastal stations, Virginia to the Gulf plus NJ & NY (offline)', k: 'tide tides high low coast beach marsh ocean water level' },
+    { id: 'tides', icon: '🌊', title: 'Tides', sum: 'High & low tides for 2,600+ coastal stations from Maine to Texas’s border (offline)', k: 'tide tides high low coast beach marsh ocean water level' },
     { id: 'radio', icon: '📻', title: 'Radio & repeaters', sum: 'Emergency frequencies + your imported repeater list', k: 'radio repeater ham gmrs frs frequency chirp repeaterbook' }
   );
 

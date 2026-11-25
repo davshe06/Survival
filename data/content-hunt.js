@@ -24,7 +24,16 @@
 <tr><td>West Virginia</td><td>WV Division of Natural Resources — wvdnr.gov</td></tr>
 <tr><td>Pennsylvania</td><td>PA Game Commission (hunting & trapping) — pgc.pa.gov · PA Fish & Boat Commission (fishing & boating) — fishandboat.com</td></tr>
 <tr><td>New Jersey</td><td>NJ Division of Fish & Wildlife — dep.nj.gov/njfw</td></tr>
-<tr><td>New York</td><td>NYS Dept. of Environmental Conservation — dec.ny.gov</td></tr></table></div>
+<tr><td>New York</td><td>NYS Dept. of Environmental Conservation — dec.ny.gov</td></tr>
+<tr><td>Connecticut</td><td>CT DEEP Fish & Wildlife — portal.ct.gov/deep</td></tr>
+<tr><td>Rhode Island</td><td>RI DEM Fish & Wildlife — dem.ri.gov</td></tr>
+<tr><td>Massachusetts</td><td>MassWildlife — mass.gov/masswildlife</td></tr>
+<tr><td>Vermont</td><td>Vermont Fish & Wildlife — vtfishandwildlife.com</td></tr>
+<tr><td>New Hampshire</td><td>NH Fish and Game — wildlife.nh.gov</td></tr>
+<tr><td>Maine</td><td>Maine Dept. of Inland Fisheries & Wildlife — maine.gov/ifw (saltwater: Dept. of Marine Resources)</td></tr>
+<tr><td>Maryland</td><td>Maryland DNR — dnr.maryland.gov</td></tr>
+<tr><td>Delaware</td><td>DNREC Fish & Wildlife — dnrec.delaware.gov</td></tr>
+<tr><td>Washington, DC</td><td>DOEE Fisheries & Wildlife — doee.dc.gov (fishing only; no hunting)</td></tr></table></div>
 <p>Most states sell licenses online and through their own free phone apps — buy before you go and keep a screenshot. Saltwater fishing often needs a separate license or free registry.</p>
 <h2>General rules of thumb</h2>
 <ul><li><b>Private land:</b> you need the landowner's permission to hunt, fish, trap or forage. Purple paint marks on trees/posts mean "No trespassing" in most Southeast states.</li>
@@ -102,7 +111,7 @@ ${figs(fig(H.rack, 'With no electricity, thin strips dry over a low smoky fire i
 <h2>Use the whole animal</h2><ul><li><b>Heart and liver:</b> slice and fry the first night (check the liver for spots or flukes).</li><li><b>Bones:</b> roast, then simmer 12–24 hours for broth.</li><li><b>Hog fat:</b> render into lard: cut fat into cubes, heat slowly with a splash of water until the fat melts out; strain. Keeps months in a cool, dark place.</li><li><b>Hides:</b> salt heavily and roll if you want to tan them later.</li></ul>` },
       { id: 'hogs', title: 'Feral hogs: hunting, trapping & safety', icon: '🐗', sum: 'The Southeast’s most available big game — and its dangers and diseases', tags: ['hog', 'feral hog', 'wild boar', 'pig', 'trap', 'corral trap', 'brucellosis', 'pseudorabies', 'hunting', 'nuisance'], body: `
 <p>Feral hogs live in every Southeast state, multiply fast (a sow can raise two litters of 4–10 a year), and tear up farms and woods. Many states encourage removing them: on private land with permission, hogs often have <b>no season and no bag limit</b>, and some states allow night hunting with a permit. Rules vary, so check your state's wildlife agency. <b>Moving live hogs is illegal almost everywhere.</b></p>
-<div class="box info">In <b>Pennsylvania, New Jersey and New York</b> feral hogs are rare and targeted by eradication programs. Report sightings to the state wildlife agency rather than hunting them. New York prohibits hunting them, because shooting scatters the group and makes it harder for trapping crews to remove them all.</div>
+<div class="box info">In <b>the Northeast</b> (Pennsylvania, New Jersey, New York and New England) feral hogs are rare and targeted by eradication programs. Report sightings to the state wildlife agency rather than hunting them. New York prohibits hunting them, because shooting scatters the group and makes it harder for trapping crews to remove them all.</div>
 <div class="box danger"><b class="lbl">Dangers</b><ul style="margin:0"><li>Boars have razor‑sharp tusks; sows defend piglets. Give groups room, and have a tree or vehicle to get onto if one charges.</li><li><b>Brucellosis</b> passes to people through blood and fluids: wear gloves and eye protection when field dressing; cover cuts.</li><li><b>Pseudorabies</b> is harmless to people but kills dogs. <b>Never feed raw hog meat or scraps to dogs</b> or let them eat a carcass.</li><li>Cook hog meat to 160°F (trichinella, toxoplasma).</li></ul></div>
 ${figs(fig(H.hogVitals, 'Aim low on the front shoulder crease. A hog shot too far back may run a long way into thick cover.'), fig(H.hogTrap, 'A corral trap catches the whole group. Pre‑bait for days with the gate tied open so wary adults get used to it.'))}
 <h2>Hunting hogs</h2><ul><li>Look for rooting (ground plowed up like a tiller went through), muddy wallows, rubbed trees near wallows with mud on them, and trails through thick cover near water.</li><li>Hogs have a great nose and poor eyesight: play the wind even more carefully than for deer.</li><li>They are most active at night and in the first and last light, especially in summer heat.</li><li>Use deer‑class rifles; for big boars choose heavier, tougher bullets.</li></ul>
