@@ -11,7 +11,7 @@
 
   TOOL_LIST.unshift(
     { id: 'share', icon: '📲', title: 'Text my location', sum: 'Send your GPS position by text to 911 or a contact', k: 'sos text sms share location 911 help send coordinates' },
-    { id: 'tides', icon: '🌊', title: 'Tides', sum: 'High & low tides for 1,700+ Southeast coastal stations (offline)', k: 'tide tides high low coast beach marsh ocean water level' },
+    { id: 'tides', icon: '🌊', title: 'Tides', sum: 'High & low tides for 2,100+ coastal stations, Virginia to the Gulf plus NJ & NY (offline)', k: 'tide tides high low coast beach marsh ocean water level' },
     { id: 'radio', icon: '📻', title: 'Radio & repeaters', sum: 'Emergency frequencies + your imported repeater list', k: 'radio repeater ham gmrs frs frequency chirp repeaterbook' }
   );
 
@@ -25,7 +25,7 @@
         <select class="inp" id="shKind"><option value="help">I need help</option><option value="ok">I'm OK — here is where I am</option><option value="med">Medical emergency</option><option value="custom">Custom…</option></select>
         <textarea class="inp" id="shExtra" rows="2" placeholder="Optional: what happened, how many people, injuries" style="margin-top:8px"></textarea></div>
       <div class="list" id="shBtns"></div>
-      <div class="box info small"><b class="lbl">Why text?</b>Texts need far less signal than calls and keep retrying. Text‑to‑911 works in most Southeast counties — if it isn't available you'll get a bounce‑back message, so call instead. iPhone 14 and newer can also text 911 by satellite with no service (Settings → Emergency SOS).</div>
+      <div class="box info small"><b class="lbl">Why text?</b>Texts need far less signal than calls and keep retrying. Text‑to‑911 works in most counties — if it isn't available you'll get a bounce‑back message, so call instead. iPhone 14 and newer can also text 911 by satellite with no service (Settings → Emergency SOS).</div>
       <p class="small muted">Add contacts in your <a href="#/ice">Emergency info card</a> to text them with one tap.</p>`;
     let pos = null;
     const body = () => {
