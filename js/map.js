@@ -85,6 +85,7 @@
         ${chipsHTML()}
         <div class="scale" id="mScale"></div>
         <div class="mcomp ${compBig ? 'big' : ''}" id="mComp" role="button" tabindex="0" aria-label="Compass. Tap to make it bigger or smaller.">${compassHTML()}</div>
+        <div class="tbt" id="mTbt" hidden></div>
         <div class="hud" id="mHud">Loading map…</div>
         <div class="sheet" id="mSheet" hidden></div>
       </div>`;
@@ -712,11 +713,110 @@
   let navRoute = store.get('navroute', null); // {mode, coords:[lat,lon,...], kinds, total, time, steps, X, Y, cum}
   let routeWorker = null, routeReq = 0, offRouteCount = 0, lastReroute = 0, routing = false;
   const MODE_INFO = { line: ['📏', 'Straight line'], car: ['🚗', 'Drive'], foot: ['🥾', 'Walk / hike'] };
+  // ---------- turn-by-turn ----------
+  let tbt = store.get('tbt', false), voiceOn = store.get('tbtVoice', true), said = {}, tbtWake = null, lastSpeak = 0;
+  const lowerFirst = t => t.charAt(0).toLowerCase() + t.slice(1);
+  function spoken(t) { // read road names the way people say them
+    return t.replace(/\bI-(\d+)((?:[,/]\d+)*)/g, (m, a, b) => 'Interstate ' + a + (b ? ' and ' + b.slice(1).split(/[,/]/).join(' and ') : ''))
+      .replace(/\bUS-(?:Bus,|Byp,|Alt,)?(\d+)(?:[,/][\w]+)*/g, 'U.S. $1').replace(/\bSR-(\d+)(?:[,/][\w]+)*/g, 'State Route $1')
+      .replace(/\bSt\b/g, 'Street').replace(/\bRd\b/g, 'Road').replace(/\bAve\b/g, 'Avenue').replace(/\bDr\b/g, 'Drive').replace(/\bBlvd\b/g, 'Boulevard')
+      .replace(/\bHwy\b/g, 'Highway').replace(/\bLn\b/g, 'Lane').replace(/\bPkwy\b/g, 'Parkway').replace(/\bCt\b/g, 'Court').replace(/\bCir\b/g, 'Circle').replace(/\bTrl\b/g, 'Trail').replace(/\bPl\b/g, 'Place');
+  }
+  function speak(t, force) {
+    if (!voiceOn && !force) return;
+    try { const u = new SpeechSynthesisUtterance(spoken(t)); u.lang = 'en-US'; const v = speechSynthesis.getVoices().find(v => /^en[-_]US/i.test(v.lang)) || speechSynthesis.getVoices().find(v => /^en/i.test(v.lang)); if (v) u.voice = v; u.rate = 1; speechSynthesis.cancel(); speechSynthesis.speak(u); lastSpeak = Date.now(); } catch (e) { }
+  }
+  function sayDist(m) { // natural spoken distance
+    if (window.FG.units() === 'met') return m < 950 ? (Math.round(m / 50) * 50 || 50) + ' meters' : (Math.round(m / 100) / 10) + ' kilometers';
+    const mi = m / 1609.34; if (mi < 0.15) return (Math.max(1, Math.round(m * 3.28084 / 100)) * 100) + ' feet';
+    if (mi < 0.35) return 'a quarter mile'; if (mi < 0.65) return 'half a mile'; if (mi < 0.85) return 'three quarters of a mile';
+    if (mi < 1.25) return '1 mile'; return (Math.round(mi * 2) / 2) + ' miles';
+  }
+  function showDist(m) { if (window.FG.units() === 'met') return m < 950 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(1) + ' km'; const ft = m * 3.28084; return ft < 1000 ? Math.round(ft / 10) * 10 + ' ft' : (m / 1609.34).toFixed(m < 16093 ? 1 : 0) + ' mi'; }
+  function arrowSVG(m) {
+    if (!m) return '';
+    if (m.type === 'finish' || m.type === 'arrive') return '<div class="tbt-flag">🏁</div>';
+    let a = m.type === 'start' || m.type === 'straight' ? 0 : m.type === 'merge' || m.type === 'ramp' ? (m.angle < 0 ? -40 : 40) : Math.max(-150, Math.min(150, m.angle));
+    if (m.type === 'uturn') { const L = m.angle < 0; return `<svg viewBox="0 0 64 64" class="tbt-arrow"><path d="M${L ? 42 : 22} 60 V28 a10 10 0 0 0 ${L ? -20 : 20} 0 V40" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M${L ? 12 : 32} 38 l10 14 l10 -14z" fill="currentColor"/></svg>`; }
+    const r = a * Math.PI / 180, ex = 32 + 20 * Math.sin(r), ey = 30 - 20 * Math.cos(r), hx = Math.sin(r), hy = -Math.cos(r);
+    const tip = [ex + hx * 12, ey + hy * 12], l = [ex - hy * 9, ey + hx * 9], rr = [ex + hy * 9, ey - hx * 9];
+    return `<svg viewBox="0 0 64 64" class="tbt-arrow"><path d="M32 60 V30 L${ex.toFixed(1)} ${ey.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M${tip.map(v => v.toFixed(1)).join(' ')} L${l.map(v => v.toFixed(1)).join(' ')} L${rr.map(v => v.toFixed(1)).join(' ')}z" fill="currentColor"/></svg>`;
+  }
+  function startTbt() {
+    if (!navRoute) return; tbt = true; store.set('tbt', true); said = {};
+    follow = true; store.set('mapfollow', true); const b = $('#mLoc'); if (b) b.classList.add('on');
+    if (pos) { S.lat = pos.lat; S.lon = pos.lon; } S.z = 16;
+    if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => tbtWake = w).catch(() => { });
+    try { speechSynthesis.getVoices(); } catch (e) { }
+    const p = routeProgress(), m0 = navRoute.man && navRoute.man[0];
+    speak((m0 ? m0.text + '. ' : '') + (p && p.man && p.man !== m0 ? 'Then in ' + sayDist(p.manDist) + ', ' + lowerFirst(p.man.text) : ''), false);
+    closeSheet(); dirty = true; updateHud();
+  }
+  function stopTbt() { tbt = false; store.set('tbt', false); if (tbtWake) { tbtWake.release().catch(() => { }); tbtWake = null; } const el = $('#mTbt'); if (el) el.hidden = true; document.body.classList.remove('tbt-on'); }
+  function updateTbt(p) {
+    const el = $('#mTbt'); if (!el) return;
+    if (!tbt || !navRoute || !p) { el.hidden = true; document.body.classList.remove('tbt-on'); return; }
+    el.hidden = false; document.body.classList.add('tbt-on');
+    const m = p.man, d = Math.max(0, p.manDist), v = pos && pos.spd > 1 ? pos.spd : 13, off = p.off > 120;
+    // spoken prompts: far, closer, and at the turn
+    if (m && !off) {
+      const k = m.at + ':' + m.type, far = Math.max(700, v * 45), mid = Math.max(160, v * 12), now = Math.max(35, v * 4);
+      const then = p.manNext && p.manNext.d - m.d < 200 && p.manNext.type !== 'finish' ? ', then ' + lowerFirst(p.manNext.text) : '';
+      const fin = m.type === 'finish', finTxt = /^Your destination|, straight/.test(m.text) ? m.text : 'You have arrived at your destination';
+      if (d <= now && !said[k + 'n']) { said[k + 'n'] = said[k + 'm'] = said[k + 'f'] = 1; if (fin) said.arrived = 1; speak(fin ? (finTxt.startsWith('Your') ? 'You have arrived. ' + finTxt : finTxt) : m.text + then); }
+      else if (d <= mid && d > now && !said[k + 'm']) { said[k + 'm'] = said[k + 'f'] = 1; speak('In ' + sayDist(d) + ', ' + (fin ? (finTxt.startsWith('Your') ? lowerFirst(finTxt) : 'your destination is ahead') : lowerFirst(m.text)) + then); }
+      else if (d <= far && d > mid * 1.5 && !said[k + 'f'] && m.type !== 'straight' && m.type !== 'finish') { said[k + 'f'] = 1; speak('In ' + sayDist(d) + ', ' + lowerFirst(m.text)); }
+    }
+    const u = window.FG.units(), eta = new Date(Date.now() + p.eta * 1000);
+    el.innerHTML = off ? `<div class="tbt-main tbt-off"><div class="tbt-icon">⚠️</div><div><div class="tbt-dist">Off route</div><div class="tbt-text">Rerouting… head back toward the blue line if it's safe</div></div></div>`
+      : `<div class="tbt-main"><div class="tbt-icon">${arrowSVG(m)}</div><div class="tbt-body"><div class="tbt-dist">${m && m.type !== 'finish' ? showDist(d) : showDist(p.left)}</div><div class="tbt-text">${esc(m ? m.text : 'Continue')}</div></div></div>
+        ${p.manNext && m && m.type !== 'finish' ? `<div class="tbt-next">Then ${arrowSVG(p.manNext).replace('tbt-arrow', 'tbt-arrow sm')} ${esc(p.manNext.text)}</div>` : ''}`;
+    el.innerHTML += `<div class="tbt-bar"><span><b>${eta.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</b> arrival · ${Geo.fmtDist(p.left, u)} · ${fmtTime(p.eta)}</span><span><button class="btn" id="tbtVoice" aria-label="Voice on or off">${voiceOn ? '🔊' : '🔇'}</button><button class="btn" id="tbtList">☰</button><button class="btn red" id="tbtEnd">✕ End</button></span></div>`;
+    $('#tbtVoice').onclick = () => { voiceOn = !voiceOn; store.set('tbtVoice', voiceOn); if (!voiceOn) try { speechSynthesis.cancel(); } catch (e) { } else speak('Voice guidance on', true); updateHud(); };
+    $('#tbtList').onclick = () => showRouteSummary(false);
+    $('#tbtEnd').onclick = () => endNav();
+    if (pos && follow) { S.z = v > 24 ? 14.6 : v > 13 ? 15.4 : 16.3; }
+  }
   function prepRoute(r) {
     if (!r) return null;
     const n = r.coords.length / 2; r.X = new Float64Array(n); r.Y = new Float64Array(n); r.cum = new Float64Array(n);
     for (let i = 0; i < n; i++) { r.X[i] = mx(r.coords[i * 2 + 1]); r.Y[i] = my(r.coords[i * 2]); if (i) r.cum[i] = r.cum[i - 1] + Geo.dist({ lat: r.coords[i * 2 - 2], lon: r.coords[i * 2 - 1] }, { lat: r.coords[i * 2], lon: r.coords[i * 2 + 1] }); }
+    r.man = buildManeuvers(r);
     return r;
+  }
+  // ---------- turn-by-turn maneuvers from the route geometry ----------
+  const isHwy = n => /^(I-|US-|SR-|Ramp)/.test(n || '');
+  function ptAt(r, d) { // point on the route at distance d along it
+    const c = r.cum, n = c.length; d = Math.max(0, Math.min(c[n - 1], d));
+    let lo = 0, hi = n - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (c[m] <= d) lo = m; else hi = m; }
+    const f = c[hi] > c[lo] ? (d - c[lo]) / (c[hi] - c[lo]) : 0;
+    return { lat: r.coords[lo * 2] + (r.coords[hi * 2] - r.coords[lo * 2]) * f, lon: r.coords[lo * 2 + 1] + (r.coords[hi * 2 + 1] - r.coords[lo * 2 + 1]) * f };
+  }
+  function buildManeuvers(r) {
+    const st = r.steps || [], out = [], road = n => !n || /^Unnamed/.test(n) ? '' : n.replace(/^(I|US|SR)-([\w]+(?:,[\w]+)+)$/, (m, a, b) => a + '-' + b.split(',').join('/')).replace(/^US-(Bus|Byp|Alt)\/(\d+)/, 'US-$2 $1');
+    for (let i = 0; i < st.length; i++) {
+      const s = st[i], d0 = r.cum[s.at], nm = road(s.name), next = st[i + 1];
+      if (i === 0) { out.push({ at: s.at, d: d0, type: 'start', angle: 0, name: nm, text: s.kind === 'off' ? 'Drive to the road' : nm ? 'Head out on ' + nm : 'Start driving' }); continue; }
+      const b1 = Geo.bearing(ptAt(r, d0 - 30), ptAt(r, d0)), b2 = Geo.bearing(ptAt(r, d0), ptAt(r, d0 + 30));
+      const a = ((b2 - b1 + 540) % 360) - 180, side = a < 0 ? 'left' : 'right', abs = Math.abs(a), prev = st[i - 1].name;
+      let type, text;
+      if (s.kind === 'off' && i === st.length - 1 && r.mode === 'car' && s.dist < 400) { // short hop from the road to the address: say which side it's on
+        const n = r.cum.length, dest = { lat: r.coords[n * 2 - 2], lon: r.coords[n * 2 - 1] }, rel = ((Geo.bearing(ptAt(r, d0), dest) - b1 + 540) % 360) - 180;
+        out.push({ at: s.at, d: d0, type: 'finish', angle: 0, name: '', text: Math.abs(rel) < 25 || Math.abs(rel) > 155 ? 'Arrive at your destination, straight ahead' : 'Your destination is on the ' + (rel < 0 ? 'left' : 'right') });
+        return out;
+      }
+      if (s.kind === 'off') { type = 'arrive'; text = 'Leave the road and continue to the destination'; }
+      else if (s.name === 'Ramp') { const to = next && road(next.name); type = abs < 20 ? 'ramp' : 'ramp'; text = (/^I-|^US-/.test(prev) ? 'Take the exit' : 'Take the ramp') + (abs >= 8 ? ' on the ' + side : '') + (to ? ' toward ' + to : ''); }
+      else if (prev === 'Ramp' && isHwy(nm)) { type = 'merge'; text = 'Merge onto ' + nm; }
+      else if (abs < 25) { type = 'straight'; text = nm ? 'Continue onto ' + nm : 'Continue straight'; }
+      else if (abs < 60) { type = 'slight'; text = 'Bear ' + side + (nm ? ' onto ' + nm : ''); }
+      else if (abs < 135) { type = 'turn'; text = 'Turn ' + side + (nm ? ' onto ' + nm : ''); }
+      else if (abs < 165) { type = 'sharp'; text = 'Make a sharp ' + side + (nm ? ' onto ' + nm : ''); }
+      else { type = 'uturn'; text = 'Make a U-turn' + (nm ? ' onto ' + nm : ''); }
+      out.push({ at: s.at, d: d0, type, angle: type === 'straight' ? 0 : a, name: nm, text });
+    }
+    const n = r.cum.length; out.push({ at: n - 1, d: r.cum[n - 1], type: 'finish', angle: 0, name: '', text: 'Arrive at your destination' });
+    return out;
   }
   navRoute = prepRoute(navRoute);
   function fmtTime(s) { s = Math.round(s / 60); return s < 60 ? s + ' min' : Math.floor(s / 60) + ' h ' + (s % 60) + ' min'; }
@@ -764,7 +864,8 @@
     target = { lat: dest.lat, lon: dest.lon, name: dest.name, mode: r ? r.mode : 'line' }; store.set('navtarget', target);
     navRoute = prepRoute(r); offRouteCount = 0;
     store.set('navroute', r ? { mode: r.mode, coords: r.coords, kinds: r.kinds, total: r.total, time: r.time, steps: r.steps, byKind: r.byKind, haveLocal: r.haveLocal } : null);
-    if (navRoute) { // overview: fit the whole route on screen
+    if (navRoute && tbt) { said = {}; speak('Route updated'); }
+    else if (navRoute) { // overview: fit the whole route on screen
       let x0 = 1, y0 = 1, x1 = 0, y1 = 0; for (let i = 0; i < navRoute.X.length; i++) { x0 = Math.min(x0, navRoute.X[i]); x1 = Math.max(x1, navRoute.X[i]); y0 = Math.min(y0, navRoute.Y[i]); y1 = Math.max(y1, navRoute.Y[i]); }
       S.lon = ilon((x0 + x1) / 2); S.lat = ilat((y0 + y1) / 2);
       S.z = Math.max(4, Math.min(16, Math.log2(Math.min(W / Math.max(x1 - x0, 1e-9), (H * 0.55) / Math.max(y1 - y0, 1e-9)) / 256) - 0.3));
@@ -772,30 +873,38 @@
     }
     dirty = true; updateHud();
   }
-  function endNav() { target = null; navRoute = null; store.set('navtarget', null); store.set('navroute', null); dirty = true; updateHud(); closeSheet(); toast('Navigation ended'); }
+  function endNav() { stopTbt(); target = null; navRoute = null; store.set('navtarget', null); store.set('navroute', null); dirty = true; updateHud(); closeSheet(); toast('Navigation ended'); }
   let progCache = null;
   function routeProgress() {
     if (!navRoute || !pos) return null;
     if (progCache && progCache.t === pos.t && progCache.r === navRoute) return progCache.p;
-    const X = mx(pos.lon), Y = my(pos.lat), n = navRoute.X.length; let best = 0, bd = Infinity;
-    for (let i = 0; i < n; i++) { const dx = navRoute.X[i] - X, dy = navRoute.Y[i] - Y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = i; } }
-    const off = Geo.dist(pos, { lat: navRoute.coords[best * 2], lon: navRoute.coords[best * 2 + 1] });
-    const left = navRoute.total ? Math.max(0, navRoute.cum[n - 1] - navRoute.cum[best]) : 0;
+    const X = mx(pos.lon), Y = my(pos.lat), n = navRoute.X.length; let best = 0, bd = Infinity, bt = 0;
+    const scan = (a, b) => { for (let i = Math.max(0, a); i < Math.min(n - 1, b); i++) { const x1 = navRoute.X[i], y1 = navRoute.Y[i], dx = navRoute.X[i + 1] - x1, dy = navRoute.Y[i + 1] - y1, L = dx * dx + dy * dy; let t = L ? ((X - x1) * dx + (Y - y1) * dy) / L : 0; t = t < 0 ? 0 : t > 1 ? 1 : t; const ex = x1 + t * dx - X, ey = y1 + t * dy - Y, d = ex * ex + ey * ey; if (d < bd) { bd = d; best = i; bt = t; } } };
+    const prev = navRoute.lastIdx;
+    if (prev != null) scan(prev - 20, prev + 600); // stay on the stretch we were following (routes can pass near themselves)
+    const near = prev != null && Math.sqrt(bd) * 40075016 * Math.cos(pos.lat * Math.PI / 180) < 80;
+    if (!near) { bd = Infinity; scan(0, n); }
+    if (n < 2) best = 0;
+    navRoute.lastIdx = best;
+    const sAlong = navRoute.cum[best] + bt * ((navRoute.cum[best + 1] || navRoute.cum[best]) - navRoute.cum[best]);
+    const snap = ptAt(navRoute, sAlong), off = Geo.dist(pos, snap);
+    const left = navRoute.total ? Math.max(0, navRoute.cum[n - 1] - sAlong) : 0;
     const frac = navRoute.cum[n - 1] ? left / navRoute.cum[n - 1] : 0;
     let step = null; for (const s of navRoute.steps) if (s.at <= best) step = s; const next = navRoute.steps.find(s => s.at > best);
     // a point ~60 m ahead on the route, for the compass arrow
     let ahead = n - 1; for (let i = best; i < n; i++) if (navRoute.cum[i] - navRoute.cum[best] > 60) { ahead = i; break; }
-    const res = { idx: best, off, left: left + Math.min(off, 50), eta: navRoute.time * frac, step, next, ahead: { lat: navRoute.coords[ahead * 2], lon: navRoute.coords[ahead * 2 + 1] } };
+    const mi = navRoute.man ? navRoute.man.findIndex(m => m.d > sAlong + 5) : -1;
+    const res = { idx: best, s: sAlong, off, left: left + Math.min(off, 50), eta: navRoute.time * frac, step, next, ahead: { lat: navRoute.coords[ahead * 2], lon: navRoute.coords[ahead * 2 + 1] }, man: mi >= 0 ? navRoute.man[mi] : null, manNext: mi >= 0 ? navRoute.man[mi + 1] : null, manDist: mi >= 0 ? navRoute.man[mi].d - sAlong : 0 };
     progCache = { t: pos.t, r: navRoute, p: res }; return res;
   }
   function checkOffRoute() {
     if (!navRoute || !pos || routing) return;
     const p = routeProgress(); if (!p) return;
-    if (Geo.dist(pos, target) < 30) { toast('🏁 You have arrived at ' + target.name); endNav(); return; }
+    if (Geo.dist(pos, target) < (navRoute.mode === 'car' ? 45 : 30)) { if (tbt && !said.arrived) speak(/^-?\d+\.\d+, *-?\d+\.\d+$/.test(target.name) ? 'You have arrived at your destination' : 'You have arrived at ' + target.name); toast('🏁 You have arrived at ' + target.name); endNav(); return; }
     const limit = navRoute.mode === 'car' ? 120 : 70;
     offRouteCount = p.off > limit ? offRouteCount + 1 : 0;
     if (offRouteCount >= 3 && Date.now() - lastReroute > 30000) {
-      lastReroute = Date.now(); offRouteCount = 0; routing = true; toast('Off route — finding a new route…');
+      lastReroute = Date.now(); offRouteCount = 0; routing = true; toast('Off route — finding a new route…'); if (tbt) speak('Rerouting');
       computeRoute(navRoute.mode, pos, target).then(r => { r.mode = navRoute.mode; routing = false; setNav(target, r); }).catch(() => { routing = false; });
     }
   }
@@ -807,11 +916,15 @@
     openSheet(`<h3 style="margin:0 0 4px">${MODE_INFO[navRoute.mode][0]} ${MODE_INFO[navRoute.mode][1]} to ${esc(target.name)}</h3>
       <p class="big" style="margin:6px 0">${Geo.fmtDist(p ? p.left : navRoute.total, u)} · ${fmtTime(p ? p.eta : navRoute.time)}</p>
       <p class="small muted">${parts}${navRoute.mode === 'car' && !navRoute.haveLocal ? '<br>⚠️ Local roads for this area aren’t downloaded, so the route only uses highways and forest roads near the ends. Download your state in Layers 🗂️ for better routes.' : ''}</p>
+      ${fresh && navRoute.mode === 'car' ? `<div class="box info" style="margin-top:6px"><b>Turn-by-turn directions?</b><br><span class="small">Follows you by GPS, shows each turn in large print and reads it aloud. Keeps the screen on.</span>
+        <div class="btnrow"><button class="btn pri" id="rsTbt">🧭 Yes, start turn-by-turn</button><button class="btn" id="rsGo">No, just show the route</button></div></div>` : ''}
       <div id="rsProf" class="small muted">⛰️ Checking elevation…</div>
       <h3>Directions</h3>
-      <div class="list">${navRoute.steps.map((s, i) => `<div class="row"><span class="i">${i === 0 ? '🚩' : '↪️'}</span><span class="t"><b>${esc(s.name)}</b><small>${kindName[['road', 'trail', 'forest', 'off'].indexOf(s.kind)]} · ${Geo.fmtDist(s.dist, u)}</small></span></div>`).join('')}<div class="row"><span class="i">🏁</span><span class="t"><b>${esc(target.name)}</b></span></div></div>
+      <div class="list">${navRoute.mode === 'car' && navRoute.man ? navRoute.man.slice(0, -1).map((m, i) => `<div class="row"><span class="i tbt-li">${arrowSVG(m)}</span><span class="t"><b>${esc(m.text)}</b><small>then go ${Geo.fmtDist(navRoute.steps[i] ? navRoute.steps[i].dist : 0, u)}</small></span></div>`).join('') : navRoute.steps.map((s, i) => `<div class="row"><span class="i">${i === 0 ? '🚩' : '↪️'}</span><span class="t"><b>${esc(s.name)}</b><small>${kindName[['road', 'trail', 'forest', 'off'].indexOf(s.kind)]} · ${Geo.fmtDist(s.dist, u)}</small></span></div>`).join('')}<div class="row"><span class="i">🏁</span><span class="t"><b>${esc(target.name)}</b></span></div></div>
       <div class="box warn small" style="margin-top:10px">Routes are calculated offline from public map data. Roads and trails can be closed, washed out, gated or on private land — use judgment and obey closures.</div>
-      <div class="btnrow"><button class="btn pri" id="rsGo">${fresh ? '▶ Start' : 'Close'}</button><button class="btn red" id="rsEnd">✕ End navigation</button></div>`);
+      ${fresh && navRoute.mode === 'car' ? `<div class="btnrow"><button class="btn red" id="rsEnd">✕ End navigation</button></div>`
+      : `<div class="btnrow"><button class="btn pri" id="rsGo">${fresh ? '▶ Start' : 'Close'}</button>${navRoute.mode === 'car' && !tbt ? '<button class="btn" id="rsTbt">🧭 Turn-by-turn</button>' : ''}<button class="btn red" id="rsEnd">✕ End navigation</button></div>`}`);
+    const tb = $('#rsTbt'); if (tb) tb.onclick = () => { if (!pos) return toast('Waiting for a GPS fix'); startTbt(); };
     $('#rsGo').onclick = () => {
       closeSheet();
       if (fresh && pos) { S.lat = pos.lat; S.lon = pos.lon; S.z = navRoute.mode === 'car' ? 14 : 15; follow = true; store.set('mapfollow', true); const b = $('#mLoc'); if (b) b.classList.add('on'); dirty = true; }
@@ -930,10 +1043,11 @@
       const q = age > 30 ? ['⚪', 'GPS signal lost — last fix ' + Math.round(age) + ' s ago'] : a <= 10 ? ['🟢', 'GPS · strong fix'] : a <= 30 ? ['🟢', 'GPS · good fix'] : a <= 100 ? ['🟡', 'GPS · fair — move to open sky'] : ['🟠', 'Rough location — waiting for satellites'];
       h += `<div class="small">${q[0]} ${q[1]}</div>`;
       h += `<div class="mono"><b>${pos.lat.toFixed(5)}, ${pos.lon.toFixed(5)}</b> ±${Geo.fmtDist(pos.acc, u)}</div><div class="mono small muted">${Geo.toMGRS(pos.lat, pos.lon)}${pos.alt != null ? ' · alt ' + (u === 'met' ? Math.round(pos.alt) + ' m' : Math.round(pos.alt * 3.28084) + ' ft') : ''}${pos.spd > .3 ? ' · ' + (u === 'met' ? (pos.spd * 3.6).toFixed(1) + ' km/h' : (pos.spd * 2.237).toFixed(1) + ' mph') : ''}</div>`;
-      if (target && navRoute) {
+      if (target && navRoute && tbt) { updateTbt(routeProgress()); h = ''; }
+      else if (target && navRoute) {
         const p = routeProgress();
         h += `<div class="navbox"><div class="navrow"><span>${MODE_INFO[navRoute.mode][0]} <b>${esc(target.name)}</b> · ${Geo.fmtDist(p.left, u)} · ${fmtTime(p.eta)}</span><button class="btn red navend" id="navEnd">✕ End</button></div>
-          <div class="small">${p.off > (navRoute.mode === 'car' ? 120 : 70) ? '⚠️ Off route — head back to the colored line (rerouting…)' : p.next ? 'Now: ' + esc(p.step ? p.step.name : '') + ' · next: <b>' + esc(p.next.name) + '</b> in ' + Geo.fmtDist(Math.max(0, navRoute.cum[p.next.at] - navRoute.cum[p.idx]), u) : 'Continue to the destination'} · <a href="#" id="navSteps">directions</a></div></div>`;
+          <div class="small">${p.off > (navRoute.mode === 'car' ? 120 : 70) ? '⚠️ Off route — head back to the colored line (rerouting…)' : p.next ? 'Now: ' + esc(p.step ? p.step.name : '') + ' · next: <b>' + esc(p.next.name) + '</b> in ' + Geo.fmtDist(Math.max(0, navRoute.cum[p.next.at] - navRoute.cum[p.idx]), u) : 'Continue to the destination'} · <a href="#" id="navSteps">directions</a>${navRoute.mode === 'car' ? ' · <a href="#" id="navTbt">🧭 turn-by-turn</a>' : ''}</div></div>`;
       } else if (target) { const d = Geo.dist(pos, target), b = Geo.bearing(pos, target); const dc = Geo.declination(pos.lat, pos.lon); h += `<div class="navbox"><div class="navrow"><span>📏 <b>${esc(target.name)}</b>: ${Geo.fmtDist(d, u)} · ${Math.round(b)}° true (${Math.round((b - dc + 360) % 360)}° mag) ${Geo.cardinal(b)}</span><button class="btn red navend" id="navEnd">✕ End</button></div></div>`; }
     } else {
       h += gpsErr && gpsErr.code !== 3 ? '<span class="muted">' + esc(window.FG.gpsErrText(gpsErr)) + '</span>'
@@ -944,6 +1058,9 @@
     setHud(h);
     const ne = $('#navEnd'); if (ne) ne.onclick = e => { e.preventDefault(); endNav(); };
     const ns = $('#navSteps'); if (ns) ns.onclick = e => { e.preventDefault(); showRouteSummary(false); };
+    const nt = $('#navTbt'); if (nt) nt.onclick = e => { e.preventDefault(); startTbt(); };
+    if (!(tbt && target && navRoute && pos)) updateTbt(null);
+    const hud = $('#mHud'); if (hud) hud.hidden = !!(tbt && target && navRoute && pos && !recording);
   }
   function trackLen(t) { let s = 0; for (let i = 1; i < t.length; i++) s += Geo.dist({ lat: t[i - 1][0], lon: t[i - 1][1] }, { lat: t[i][0], lon: t[i][1] }); return s; }
 
@@ -1117,9 +1234,10 @@
       <label class="f">Detailed background (needs saved tiles or internet)</label>
       <select class="inp" id="lyr"><option value="">None — built‑in offline map only</option>${Object.entries(TILE_SOURCES).filter(([, v]) => !v.overlay).map(([k, v]) => `<option value="${k}" ${tilesOn === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
       <label class="chk" style="padding-left:0"><input type="checkbox" id="grd" ${store.get('mapgrid', false) ? 'checked' : ''}><span class="t"><b>Lat/long grid</b></span></label>
-      <h3>Detailed local roads (offline, by state)</h3>
-      <p class="small muted">Highways, state & county roads, forest service roads and hiking trails are built in. Every residential and back road is a separate download per state (zoom in past level 11 to see them).</p>
-      <div class="list" id="packList">${(SEIDX ? SEIDX.states : []).map(st => `<div class="row"><span class="t"><b>${esc(st.name)}</b><small>${(st.local / 1e6).toFixed(0)} MB · ${st.counts.local.toLocaleString()} roads ${LOCALHAVE[st.code] ? '· ✅ saved' : ''}</small></span>${LOCALHAVE[st.code] ? `<button class="btn" data-pdel="${st.code}">Delete</button>` : `<button class="btn pri" data-pget="${st.code}">Download</button>`}</div>`).join('') || '<p class="muted small">Loading state list…</p>'}</div>
+      <h3>Local roads & street addresses (offline, by state)</h3>
+      <p class="small muted">Highways, state & county roads, forest service roads and hiking trails are built in. Every residential and back road, and the street addresses you can search for (🔍), are separate downloads per state. Get both for the states you drive in.</p>
+      <div class="list" id="packList">${(SEIDX ? SEIDX.states : []).map(st => { const A = ADDRIDX && ADDRIDX[st.code]; return `<div class="row" style="flex-wrap:wrap"><span class="t"><b>${esc(st.name)}</b><small>🛣️ local roads ${(st.local / 1e6).toFixed(0)} MB ${LOCALHAVE[st.code] ? '✅' : ''}${A ? ` · 🏠 ${A.n.toLocaleString()} addresses ${(A.size / 1e6).toFixed(0)} MB ${ADDRHAVE[st.code] ? '✅' : ''}` : ' · 🏠 no address data for this state'}</small></span>
+        ${LOCALHAVE[st.code] ? `<button class="btn" data-pdel="${st.code}">Delete roads</button>` : `<button class="btn pri" data-pget="${st.code}">Roads</button>`}${A ? (ADDRHAVE[st.code] ? `<button class="btn" data-adel="${st.code}">Delete addresses</button>` : `<button class="btn pri" data-aget="${st.code}">Addresses</button>`) : ''}</div>`; }).join('') || '<p class="muted small">Loading state list…</p>'}</div>
       <p class="small" id="packProg"></p>
       <h3>Save topo maps & terrain for offline use</h3>
       <ol class="small"><li>While online, pan/zoom so the area you need fills the screen.</li><li>Choose how much detail and tap Download.</li><li>Repeat for each area (home, bug‑out route, destination).</li></ol>
@@ -1150,27 +1268,115 @@
       try { const r = await fetch(packURL(code), { cache: 'reload' }); if (!r.ok) throw 0; const c = await caches.open(PACK_CACHE); await c.put(packURL(code), r); LOCALHAVE[code] = true; loadingSet.delete('L' + code); if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); toast('Saved local roads for ' + code); dirty = true; showLayers(); }
       catch (e) { b.disabled = false; $('#packProg').textContent = 'Download failed — try again with a better connection.'; }
     });
+    document.querySelectorAll('[data-aget]').forEach(b => b.onclick = async () => { b.disabled = true; $('#packProg').textContent = 'Downloading ' + b.dataset.aget + ' addresses…'; if (await addrDownload(b.dataset.aget)) { toast('Saved addresses for ' + b.dataset.aget); showLayers(); } else { b.disabled = false; $('#packProg').textContent = 'Download failed — try again with a better connection.'; } });
+    document.querySelectorAll('[data-adel]').forEach(b => b.onclick = async () => { const code = b.dataset.adel; if (!confirm('Delete saved addresses for ' + code + '?')) return; const c = await caches.open(PACK_CACHE); await c.delete(addrURL(code)); ADDRHAVE[code] = false; delete ADDR[code]; showLayers(); });
+    if (!ADDRIDX) addrInit().then(() => { if ($('#packList')) showLayers(); });
     document.querySelectorAll('[data-pdel]').forEach(b => b.onclick = async () => { const code = b.dataset.pdel; if (!confirm('Delete saved local roads for ' + code + '?')) return; const c = await caches.open(PACK_CACHE); await c.delete(packURL(code)); LOCALHAVE[code] = false; delete LOCAL[code]; loadingSet.delete('L' + code); dirty = true; showLayers(); });
     if (!SEIDX) setTimeout(() => { if (SEIDX && $('#packList')) showLayers(); }, 1500);
     $('#dlClear').onclick = async () => { if (!confirm('Delete all saved map tiles?')) return; await caches.delete(TILE_CACHE); store.set('savedAreas', []); toast('Deleted'); showLayers(); };
     document.querySelectorAll('[data-sa]').forEach(a => a.onclick = e => { e.preventDefault(); const s = saved[+a.dataset.sa]; S.lat = s.lat; S.lon = s.lon; S.z = s.zoom; tilesOn = s.src; store.set('maptiles', tilesOn); follow = false; dirty = true; closeSheet(); });
   }
 
+  // ---------- offline street addresses (downloaded per state) ----------
+  const addrURL = c => new URL('data/addr/' + c + '.json', location.href).href;
+  let ADDRIDX = null; const ADDR = {}, ADDRHAVE = {};
+  const ABBR = { street: 'st', road: 'rd', avenue: 'ave', av: 'ave', drive: 'dr', lane: 'ln', court: 'ct', boulevard: 'blvd', highway: 'hwy', parkway: 'pkwy', circle: 'cir', place: 'pl', terrace: 'ter', trail: 'trl', north: 'n', south: 's', east: 'e', west: 'w', northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw', mount: 'mt', saint: 'st', fort: 'ft', point: 'pt', square: 'sq', expressway: 'expy', freeway: 'fwy', turnpike: 'tpke', alley: 'aly', crossing: 'xing', route: 'rte', county: 'co', extension: 'ext', heights: 'hts', junction: 'jct', center: 'ctr', creek: 'crk', ridge: 'rdg', valley: 'vly', estates: 'est', loop: 'loop', pike: 'pike', row: 'row', run: 'run' };
+  const SUFFIX = new Set(['st', 'rd', 'ave', 'dr', 'ln', 'ct', 'blvd', 'hwy', 'pkwy', 'cir', 'pl', 'ter', 'trl', 'way', 'sq', 'expy', 'fwy', 'tpke', 'aly', 'xing', 'loop', 'pike', 'row', 'run']);
+  const normSt = t => String(t).toLowerCase().replace(/[.,#'’]/g, ' ').split(/\s+/).filter(Boolean).map(w => ABBR[w] || w).join(' ');
+  const baseKey = k => { const w = k.split(' '); return w.length > 1 && SUFFIX.has(w[w.length - 1]) ? w.slice(0, -1).join(' ') : k; };
+  const STNAME = { AL: 'alabama', AR: 'arkansas', FL: 'florida', GA: 'georgia', KY: 'kentucky', LA: 'louisiana', MS: 'mississippi', NC: 'north carolina', SC: 'south carolina', TN: 'tennessee', VA: 'virginia', WV: 'west virginia', PA: 'pennsylvania', NJ: 'new jersey', NY: 'new york', CT: 'connecticut', RI: 'rhode island', MA: 'massachusetts', VT: 'vermont', NH: 'new hampshire', ME: 'maine', MD: 'maryland', DE: 'delaware', DC: 'district of columbia' };
+  async function addrInit() {
+    if (ADDRIDX) return ADDRIDX;
+    try { ADDRIDX = await loadJSON('data/addr/index.json'); } catch (e) { ADDRIDX = {}; }
+    try { const c = await caches.open(PACK_CACHE); for (const k of Object.keys(ADDRIDX)) ADDRHAVE[k] = !!(await c.match(addrURL(k))); } catch (e) { }
+    return ADDRIDX;
+  }
+  async function addrLoad(code) {
+    if (ADDR[code]) return ADDR[code];
+    const c = await caches.open(PACK_CACHE), r = await c.match(addrURL(code)); if (!r) return null;
+    const d = await r.json(); d.byKey = new Map(); d.byBase = new Map(); d.cityN = d.cities.map(c => c[0].toLowerCase());
+    d.streets.forEach((st, i) => { const k = normSt(st[0]), b = baseKey(k); (d.byKey.get(k) || d.byKey.set(k, []).get(k)).push(i); if (b !== k) (d.byBase.get(b) || d.byBase.set(b, []).get(b)).push(i); });
+    return ADDR[code] = d;
+  }
+  async function addrDownload(code, btn) {
+    if (!navigator.onLine) { toast('Connect to the internet to download'); return false; }
+    try { const r = await fetch(addrURL(code), { cache: 'reload' }); if (!r.ok) throw 0; const c = await caches.open(PACK_CACHE); await c.put(addrURL(code), r); ADDRHAVE[code] = true; if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); return true; }
+    catch (e) { toast('Address download failed — try again with a better connection'); return false; }
+  }
+  const DIRS = new Set(['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']);
+  const prettySt = t => t.split(' ').map(w => DIRS.has(w.toLowerCase()) ? w.toUpperCase() : /^\d+(st|nd|rd|th)$/i.test(w) ? w.toLowerCase() : /^(us|sr|cr|fm|i)-?\d/i.test(w) ? w.toUpperCase() : w).join(' ');
+  function streetPts(flat) { const o = []; let n = 0, x = 0, y = 0; for (let i = 0; i < flat.length; i += 3) { n += flat[i]; x += flat[i + 1]; y += flat[i + 2]; o.push([n, x / 1e5, y / 1e5]); } return o; }
+  function placeNumber(pts, N) { // interpolate a house number along the street (same side of the street when possible)
+    const side = pts.filter(p => p[0] % 2 === N % 2), use = side.length >= 2 || (side.length === 1 && side[0][0] === N) ? side : pts;
+    if (N < use[0][0] || N > use[use.length - 1][0]) { const e = N < use[0][0] ? use[0] : use[use.length - 1]; return { lon: e[1], lat: e[2], exact: false, off: Math.abs(N - e[0]) }; }
+    for (let i = 0; i < use.length; i++) { if (use[i][0] === N) return { lon: use[i][1], lat: use[i][2], exact: true, off: 0 }; if (use[i][0] > N) { const a = use[i - 1], b = use[i], f = (N - a[0]) / (b[0] - a[0]); return { lon: a[1] + (b[1] - a[1]) * f, lat: a[2] + (b[2] - a[2]) * f, exact: true, off: 0 }; } }
+    const e = use[use.length - 1]; return { lon: e[1], lat: e[2], exact: true, off: 0 };
+  }
+  async function geocode(q) {
+    await addrInit();
+    const have = Object.keys(ADDRHAVE).filter(k => ADDRHAVE[k]); if (!have.length) return { none: true };
+    let s = q.trim().replace(/\b(apt|apartment|unit|suite|ste|lot|#)\s*\w+/gi, ' ');
+    const m = s.match(/^(\d{1,6})[a-z]?\s+(.+)$/i), N = m ? +m[1] : null, rest = (m ? m[2] : s).toLowerCase();
+    const toks = rest.split(/[\s,]+/).filter(Boolean), zip = toks.find(t => /^\d{5}$/.test(t));
+    let states = have.filter(c => toks.includes(c.toLowerCase()) || rest.includes(STNAME[c]));
+    if (!states.length) states = have;
+    const out = [];
+    for (const code of states) {
+      const d = await addrLoad(code); if (!d) continue;
+      for (let j = toks.length; j >= 1; j--) {
+        const key = normSt(toks.slice(0, j).join(' ')); if (!key) continue;
+        const ids = (d.byKey.get(key) || []).concat(d.byBase.get(key) || []); if (!ids.length) continue;
+        const cityWords = toks.slice(j).filter(t => t !== zip && t !== code.toLowerCase() && !STNAME[code].split(' ').includes(t)).join(' ');
+        for (const i of ids) {
+          const [name, ci, z, flat] = d.streets[i], city = ci >= 0 ? d.cities[ci][0] : '';
+          let score = 0; if (zip) { if (z === zip) score += 5; else continue; }
+          if (cityWords) { if (city.toLowerCase().includes(cityWords) || cityWords.includes(city.toLowerCase())) score += 4; else score -= 3; }
+          const pts = streetPts(flat); let loc;
+          if (N != null) { loc = placeNumber(pts, N); if (!loc.exact && loc.off > 200) continue; if (loc.exact) score += 3; }
+          else { const mid = pts[pts.length >> 1]; loc = { lon: mid[1], lat: mid[2], exact: true }; }
+          out.push({ n: (N != null ? N + ' ' : '') + prettySt(name), s: [city, code + (z ? ' ' + z : '')].filter(Boolean).join(', ') + (N != null && !loc.exact ? ' · near the end of the numbered range' : ''), x: loc.lon, y: loc.lat, z: 17, pin: 1, score, nav: true });
+        }
+        break;
+      }
+      if (N == null && toks.length) { const cq = rest.replace(/,.*$/, '').trim(); d.cityN.forEach((c, i) => { if (c.startsWith(cq)) out.push({ n: d.cities[i][0], s: code + ' · town (' + d.cities[i][3].toLocaleString() + ' addresses)', x: d.cities[i][1] / 1e5, y: d.cities[i][2] / 1e5, z: 13, score: c === cq ? 2 : 1 }); }); }
+    }
+    if (pos) out.forEach(r => r.dist = Geo.dist(pos, { lat: r.y, lon: r.x }));
+    out.sort((a, b) => b.score - a.score || (a.dist || 0) - (b.dist || 0));
+    return { res: out.slice(0, 25), states };
+  }
+
   function showSearch() {
-    openSheet(`<h3 style="margin:0 0 6px">Find a place</h3><input class="inp" id="ps" placeholder="City, county, or coordinates" autocomplete="off"><div id="pr" class="list" style="margin-top:10px"></div>`);
-    const inp = $('#ps'); inp.focus();
-    inp.oninput = () => {
-      const q = inp.value.trim().toLowerCase(); const out = $('#pr'); if (q.length < 2 || !MD) { out.innerHTML = ''; return; }
-      const c = Geo.parse(inp.value);
+    openSheet(`<h3 style="margin:0 0 6px">Find an address or place</h3><input class="inp" id="ps" placeholder="123 Main St, Athens GA · a town · coordinates" autocomplete="off" autocapitalize="words" enterkeyhint="search"><div id="pa" class="small" style="margin-top:6px"></div><div id="pr" class="list" style="margin-top:6px"></div>`);
+    const inp = $('#ps'); inp.focus(); let tmr = null, seq = 0;
+    addrInit().then(() => hint(''));
+    function hint(q) {
+      const el = $('#pa'); if (!el) return;
+      const have = Object.keys(ADDRHAVE).filter(k => ADDRHAVE[k]);
+      const here = pos || { lat: S.lat, lon: S.lon }, st = SEIDX && SEIDX.states.find(s => here.lon >= s.bbox[0] && here.lon <= s.bbox[2] && here.lat >= s.bbox[1] && here.lat <= s.bbox[3] && ADDRIDX && ADDRIDX[s.code] && !ADDRHAVE[s.code]);
+      el.innerHTML = (have.length ? `🏠 Street addresses saved for ${have.join(', ')}. ` : '🏠 To find street addresses with no signal, save your state’s addresses first. ') + (st ? `<button class="btn" id="paGet" style="min-height:32px">Save ${esc(st.name)} addresses (${(ADDRIDX[st.code].size / 1e6).toFixed(0)} MB)</button>` : '') + ' <a href="#" id="paMore">Other states</a>';
+      const b = $('#paGet'); if (b) b.onclick = async () => { b.disabled = true; b.textContent = 'Downloading…'; if (await addrDownload(st.code)) { toast('Saved addresses for ' + st.name); hint(q); run(); } else b.disabled = false; };
+      $('#paMore').onclick = e => { e.preventDefault(); showLayers(); };
+    }
+    async function run() {
+      const raw = inp.value.trim(), q = raw.toLowerCase(), out = $('#pr'), my = ++seq; if (q.length < 2 || !MD) { out.innerHTML = ''; return; }
+      const c = Geo.parse(raw);
       let res = [];
       if (c) res.push({ n: 'Go to coordinates', s: c.lat.toFixed(5) + ', ' + c.lon.toFixed(5), x: c.lon, y: c.lat, z: 13, pin: 1 });
-      MD.places.forEach(p => { if (p.n.toLowerCase().includes(q)) res.push({ n: p.n, s: p.s + ' · pop ' + (p.p || 0).toLocaleString(), x: p.x, y: p.y, z: 11 }); });
-      MD.countyLabels.forEach(p => { if ((p.n + ' county').toLowerCase().includes(q)) res.push({ n: p.n + ' County', s: p.s, x: p.x, y: p.y, z: 9.5 }); });
-      MD.airports.forEach(p => { if ((p.n + ' ' + p.c).toLowerCase().includes(q)) res.push({ n: '✈ ' + p.n, s: p.c, x: p.x, y: p.y, z: 12 }); });
-      store.get('waypoints', []).forEach(w => { if (w.name.toLowerCase().includes(q)) res.push({ n: '📌 ' + w.name, s: 'Waypoint', x: w.lon, y: w.lat, z: 14 }); });
-      res = res.slice(0, 30);
-      out.innerHTML = res.map((r, i) => `<a class="row" href="#" data-i="${i}"><span class="t"><b>${esc(r.n)}</b><small>${esc(r.s)}</small></span><span class="chev">›</span></a>`).join('') || '<p class="muted">No match in the built‑in map (it includes ~400 cities/towns, every county, and major airports).</p>';
-      out.querySelectorAll('[data-i]').forEach(a => a.onclick = e => { e.preventDefault(); const r = res[+a.dataset.i]; S.lat = r.y; S.lon = r.x; S.z = r.z; follow = false; $('#mLoc').classList.remove('on'); dirty = true; closeSheet(); if (r.pin) chooseNav({ lat: r.y, lon: r.x, name: r.s }); });
-    };
+      const g = !c && q.length >= 3 ? await geocode(raw) : {}; if (my !== seq) return;
+      if (g.res) res = res.concat(g.res);
+      if (!/^\d+\s/.test(q)) {
+        MD.places.forEach(p => { if (p.n.toLowerCase().includes(q.split(',')[0])) res.push({ n: p.n, s: p.s + ' · pop ' + (p.p || 0).toLocaleString(), x: p.x, y: p.y, z: 11 }); });
+        MD.countyLabels.forEach(p => { if ((p.n + ' county').toLowerCase().includes(q)) res.push({ n: p.n + ' County', s: p.s, x: p.x, y: p.y, z: 9.5 }); });
+        MD.airports.forEach(p => { if ((p.n + ' ' + p.c).toLowerCase().includes(q)) res.push({ n: '✈ ' + p.n, s: p.c, x: p.x, y: p.y, z: 12 }); });
+        store.get('waypoints', []).forEach(w => { if (w.name.toLowerCase().includes(q)) res.push({ n: '📌 ' + w.name, s: 'Waypoint', x: w.lon, y: w.lat, z: 14, pin: 1 }); });
+      }
+      res = res.slice(0, 30); const u = window.FG.units();
+      out.innerHTML = res.map((r, i) => `<a class="row" href="#" data-i="${i}"><span class="i">${r.nav ? '🏠' : r.pin ? '📍' : '🗺️'}</span><span class="t"><b>${esc(r.n)}</b><small>${esc(r.s)}${pos ? ' · ' + Geo.fmtDist(Geo.dist(pos, { lat: r.y, lon: r.x }), u) : ''}</small></span><span class="chev">${r.pin ? 'Go ›' : '›'}</span></a>`).join('')
+        || (/^\d+\s/.test(q) ? `<p class="muted">${g.none ? 'No street addresses saved yet. Save your state above, then try again.' : `No match in the saved addresses (${(g.states || []).join(', ')}). Try the street name the way it’s signed, add the town or ZIP code, or check the spelling.`}</p>` : '<p class="muted">No match. The built‑in map has ~400 cities and towns, every county and major airports; saved addresses add every town with a street address.</p>');
+      out.querySelectorAll('[data-i]').forEach(a => a.onclick = e => { e.preventDefault(); const r = res[+a.dataset.i]; S.lat = r.y; S.lon = r.x; S.z = r.z; follow = false; $('#mLoc').classList.remove('on'); dirty = true; closeSheet(); if (r.pin) chooseNav({ lat: r.y, lon: r.x, name: r.nav ? r.n + (r.s ? ', ' + r.s.split(' · ')[0] : '') : r.s }); });
+    }
+    inp.oninput = () => { clearTimeout(tmr); tmr = setTimeout(run, 250); };
+    inp.onkeydown = e => { if (e.key === 'Enter') { clearTimeout(tmr); run(); } };
   }
+
 })();
