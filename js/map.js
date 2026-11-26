@@ -829,7 +829,7 @@
     const el = $('#mTbt'); if (!el) return;
     if (!tbt || !navRoute || !p) { el.hidden = true; document.body.classList.remove('tbt-on'); return; }
     el.hidden = false; document.body.classList.add('tbt-on');
-    const m = p.man, d = Math.max(0, p.manDist), v = pos && pos.spd > 1 ? pos.spd : 13, off = p.off > 120;
+    const m = p.man, d = Math.max(0, p.manDist), v = pos && pos.spd > 1 ? pos.spd : 13, off = p.off > offLimit() || routing;
     // spoken prompts: far, closer, and at the turn
     if (m && !off) {
       const k = m.at + ':' + m.type, far = Math.max(700, v * 45), mid = Math.max(160, v * 12), now = Math.max(35, v * 4);
@@ -840,12 +840,13 @@
       else if (d <= far && d > mid * 1.5 && !said[k + 'f'] && m.type !== 'straight' && m.type !== 'finish') { said[k + 'f'] = 1; speak('In ' + sayDist(d) + ', ' + lowerFirst(m.text)); }
     }
     const u = window.FG.units(), eta = new Date(Date.now() + p.eta * 1000);
-    el.innerHTML = off ? `<div class="tbt-main tbt-off"><div class="tbt-icon">⚠️</div><div><div class="tbt-dist">Off route</div><div class="tbt-text">Rerouting… head back toward the blue line if it's safe</div></div></div>`
+    el.innerHTML = off ? `<div class="tbt-main tbt-off"><div class="tbt-icon">⚠️</div><div><div class="tbt-dist">${routing && p.off <= offLimit() ? 'Rerouting' : 'Off route'}</div><div class="tbt-text">${routing ? 'Finding a new route from here…' : 'Rerouting… keep driving safely'}</div></div></div>`
       : `<div class="tbt-main"><div class="tbt-icon">${arrowSVG(m)}</div><div class="tbt-body"><div class="tbt-dist">${m && m.type !== 'finish' ? showDist(d) : showDist(p.left)}</div><div class="tbt-text">${esc(m ? m.text : 'Continue')}</div></div></div>
         ${p.manNext && m && m.type !== 'finish' ? `<div class="tbt-next">Then ${arrowSVG(p.manNext).replace('tbt-arrow', 'tbt-arrow sm')} ${esc(p.manNext.text)}</div>` : ''}`;
-    el.innerHTML += `<div class="tbt-bar"><span><b>${eta.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</b> arrival · ${Geo.fmtDist(p.left, u)} · ${fmtTime(p.eta)}</span><span><button class="btn" id="tbtVoice" aria-label="Voice on or off">${voiceOn ? '🔊' : '🔇'}</button><button class="btn" id="tbtList">☰</button><button class="btn red" id="tbtEnd">✕ End</button></span></div>`;
+    el.innerHTML += `<div class="tbt-bar"><span><b>${eta.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</b> arrival · ${Geo.fmtDist(p.left, u)} · ${fmtTime(p.eta)}</span><span><button class="btn" id="tbtVoice" aria-label="Voice on or off">${voiceOn ? '🔊' : '🔇'}</button><button class="btn" id="tbtRoute" aria-label="Change route">🔀</button><button class="btn" id="tbtList">☰</button><button class="btn red" id="tbtEnd">✕ End</button></span></div>`;
     $('#tbtVoice').onclick = () => { voiceOn = !voiceOn; store.set('tbtVoice', voiceOn); if (!voiceOn) try { speechSynthesis.cancel(); } catch (e) { } else speak('Voice guidance on', true); updateHud(); };
     $('#tbtList').onclick = () => showRouteSummary(false);
+    $('#tbtRoute').onclick = showRouteOptions;
     $('#tbtEnd').onclick = () => endNav();
     if (pos && follow) { S.z = v > 24 ? 14.6 : v > 13 ? 15.4 : 16.3; }
   }
@@ -897,7 +898,8 @@
     const pad = 0.15, w = [Math.min(a.lon, b.lon) - pad, Math.min(a.lat, b.lat) - pad, Math.max(a.lon, b.lon) + pad, Math.max(a.lat, b.lat) + pad];
     return SEIDX.states.filter(s => !(s.bbox[2] < w[0] || s.bbox[0] > w[2] || s.bbox[3] < w[1] || s.bbox[1] > w[3])).map(s => s.code);
   }
-  function computeRoute(mode, from, dest) {
+  let routePref = store.get('routePref', 'fast'); // 'fast' = highways allowed, 'back' = back roads
+  function computeRoute(mode, from, dest, opt = {}) {
     if (!routeWorker) routeWorker = new Worker('js/router.js');
     const id = ++routeReq;
     return new Promise((res, rej) => {
@@ -905,7 +907,8 @@
       if (!states.length) return rej(new Error('Routing works inside the ' + SEIDX.states.length + ' states covered by the map'));
       routeWorker.onmessage = e => { if (e.data.id !== id) return; e.data.ok ? res(e.data) : rej(new Error(e.data.error)); };
       routeWorker.onerror = e => rej(new Error('Route engine failed to start' + (e.message ? ': ' + e.message : '')));
-      routeWorker.postMessage({ id, mode, from: { lat: from.lat, lon: from.lon }, to: { lat: dest.lat, lon: dest.lon }, states, packBase: new URL('data/packs/', location.href).href });
+      const hdg = mode === 'car' && from.spd > 3 && from.hdg != null && !isNaN(from.hdg) ? from.hdg : null; // moving: prefer carrying straight on over a U-turn
+      routeWorker.postMessage({ id, mode, from: { lat: from.lat, lon: from.lon }, to: { lat: dest.lat, lon: dest.lon }, states, packBase: new URL('data/packs/', location.href).href, pref: mode === 'car' ? (opt.pref || routePref) : 'fast', avoid: opt.avoid || null, hdg });
     });
   }
   // Ask how to get there
@@ -916,7 +919,7 @@
       <p class="small muted">${from ? Geo.fmtDist(d, u) + ' away in a straight line, ' + Math.round(Geo.bearing(from, dest)) + '° ' + Geo.cardinal(Geo.bearing(from, dest)) : 'Waiting for your GPS position — routes start from where you are.'}</p>
       <div class="list">
         <a class="row" href="#" data-nm="line"><span class="i">📏</span><span class="t"><b>Straight line</b><small>Compass bearing and distance, cross‑country</small></span><span class="chev">›</span></a>
-        <a class="row" href="#" data-nm="car"><span class="i">🚗</span><span class="t"><b>Drive — roads only</b><small>Fastest route on highways, local and forest service roads</small></span><span class="chev">›</span></a>
+        <a class="row" href="#" data-nm="car"><span class="i">🚗</span><span class="t"><b>Drive — roads only</b><small>${routePref === 'back' ? 'Back roads — avoids interstates and big highways' : 'Fastest route on highways, local and forest service roads'} (you can switch any time)</small></span><span class="chev">›</span></a>
         <a class="row" href="#" data-nm="foot"><span class="i">🥾</span><span class="t"><b>Walk / hike — roads &amp; trails</b><small>Fastest on foot using any mix of trails, roads and forest roads</small></span><span class="chev">›</span></a>
       </div>
       <p class="small" id="navMsg"></p>`);
@@ -925,7 +928,7 @@
       if (mode === 'line') { setNav(dest, null); closeSheet(); return; }
       if (!pos) return toast('Waiting for a GPS fix — go outside and try again in a moment');
       if (routing) return; routing = true;
-      $('#navMsg').innerHTML = '⏳ Finding the fastest ' + (mode === 'car' ? 'driving' : 'walking') + ' route offline…';
+      $('#navMsg').innerHTML = '⏳ Finding the ' + (mode === 'car' ? (routePref === 'back' ? 'back-roads driving' : 'fastest driving') : 'fastest walking') + ' route offline…';
       try {
         const r = await computeRoute(mode, pos, dest); r.mode = mode; routing = false;
         setNav(dest, r); showRouteSummary(true);
@@ -935,8 +938,8 @@
   function setNav(dest, r) {
     target = { lat: dest.lat, lon: dest.lon, name: dest.name, mode: r ? r.mode : 'line' }; store.set('navtarget', target);
     navRoute = prepRoute(r); offRouteCount = 0;
-    store.set('navroute', r ? { mode: r.mode, coords: r.coords, kinds: r.kinds, total: r.total, time: r.time, steps: r.steps, byKind: r.byKind, haveLocal: r.haveLocal } : null);
-    if (navRoute && tbt) { said = {}; speak('Route updated'); }
+    store.set('navroute', r ? { mode: r.mode, coords: r.coords, kinds: r.kinds, total: r.total, time: r.time, steps: r.steps, byKind: r.byKind, haveLocal: r.haveLocal, pref: r.pref, avoid: r.avoid } : null);
+    if (navRoute && tbt) { said = {}; if (r.announce) announceNew(r.announce); else if (!r.quiet) speak('Route updated'); }
     else if (navRoute) { // overview: fit the whole route on screen
       let x0 = 1, y0 = 1, x1 = 0, y1 = 0; for (let i = 0; i < navRoute.X.length; i++) { x0 = Math.min(x0, navRoute.X[i]); x1 = Math.max(x1, navRoute.X[i]); y0 = Math.min(y0, navRoute.Y[i]); y1 = Math.max(y1, navRoute.Y[i]); }
       S.lon = ilon((x0 + x1) / 2); S.lat = ilat((y0 + y1) / 2);
@@ -973,12 +976,69 @@
     if (!navRoute || !pos || routing) return;
     const p = routeProgress(); if (!p) return;
     if (Geo.dist(pos, target) < (navRoute.mode === 'car' ? 45 : 30)) { if (tbt && !said.arrived) speak(/^-?\d+\.\d+, *-?\d+\.\d+$/.test(target.name) ? 'You have arrived at your destination' : 'You have arrived at ' + target.name); toast('🏁 You have arrived at ' + target.name); endNav(); return; }
-    const limit = navRoute.mode === 'car' ? 120 : 70;
+    // missed a turn: two GPS fixes clearly off the line → reroute straight away from where you are, the way you're heading
+    const limit = offLimit();
     offRouteCount = p.off > limit ? offRouteCount + 1 : 0;
-    if (offRouteCount >= 3 && Date.now() - lastReroute > 30000) {
-      lastReroute = Date.now(); offRouteCount = 0; routing = true; toast('Off route — finding a new route…'); if (tbt) speak('Rerouting');
-      computeRoute(navRoute.mode, pos, target).then(r => { r.mode = navRoute.mode; routing = false; setNav(target, r); }).catch(() => { routing = false; });
+    if (offRouteCount >= 2 && Date.now() - lastReroute > 8000) {
+      lastReroute = Date.now(); offRouteCount = 0; if (tbt) speak('Rerouting'); else toast('Off route — finding a new route…');
+      reroute({}, () => 'New route').catch(() => { });
     }
+  }
+  function announceNew(pre) { // "New route. In 400 feet, turn right onto Oak St"
+    const q = routeProgress(), m = q && q.man;
+    if (m && m.type !== 'start') { said[m.at + ':' + m.type + 'f'] = 1; if (q.manDist < Math.max(160, (pos.spd || 13) * 12) * 1.2) said[m.at + ':' + m.type + 'm'] = 1; speak(pre + '. In ' + sayDist(Math.max(0, q.manDist)) + ', ' + lowerFirst(m.text)); }
+    else speak(pre + (m ? '. ' + m.text : ''));
+  }
+  const offLimit = () => navRoute.mode === 'car' ? Math.max(45, Math.min(pos.acc || 0, 60) * 1.4) : Math.max(40, Math.min(pos.acc || 0, 60) * 1.4);
+  // New route from where you are now, keeping the road preference and any detours already chosen
+  function reroute(opt, announce) {
+    if (!navRoute || !pos || !target || routing) return Promise.resolve(null);
+    const mode = navRoute.mode, pref = opt.pref || navRoute.pref || routePref;
+    let avoid = opt.avoid !== undefined ? opt.avoid : (navRoute.avoid || null);
+    if (opt.addAvoid) avoid = (avoid || []).concat(opt.addAvoid);
+    if (avoid && avoid.length > 6000) avoid = avoid.slice(-6000);
+    routing = true; updateHud();
+    return computeRoute(mode, pos, target, { pref, avoid }).then(r => {
+      r.mode = mode; r.pref = pref; r.avoid = avoid; r.quiet = true; routing = false; if (announce) r.announce = announce(r); setNav(target, r); return r;
+    }).catch(e => { routing = false; updateHud(); throw e; });
+  }
+  // the stretch of the current route ahead of you, as router node coordinates (for "avoid the road ahead")
+  function routeAhead(fromM, toM) {
+    const p = routeProgress(); if (!p) return null; const out = [], c = navRoute.cum;
+    for (let i = 0; i < c.length; i++) { if (c[i] < p.s + fromM) continue; if (c[i] > p.s + toM) break; out.push(Math.round(navRoute.coords[i * 2 + 1] * 1e5), Math.round(navRoute.coords[i * 2] * 1e5)); }
+    return out.length >= 4 ? out : null;
+  }
+  // Route options while driving: switch highways ⇄ back roads, or detour around trouble ahead
+  function showRouteOptions() {
+    if (!navRoute || navRoute.mode !== 'car') return;
+    const u = window.FG.units(), p = routeProgress(), cur = navRoute.pref || routePref, nAv = navRoute.avoid ? navRoute.avoid.length / 2 : 0;
+    const road = p ? ([p.step, p.next].find(x => x && x.kind === 'road' && x.name && !/^Unnamed|^Ramp$/.test(x.name)) || { name: 'the road ahead' }).name : 'the road ahead', aheadM = Math.min(8000, Math.max(2000, (p ? p.left : 0) * .4));
+    openSheet(`<h3 style="margin:0 0 4px">Change route</h3>
+      <p class="small muted">Now: ${cur === 'back' ? '🌾 back roads' : '🛣️ fastest'} · ${p ? fmtTime(p.eta) + ' · ' + Geo.fmtDist(p.left, u) : ''} to go${nAv ? ' · avoiding a stretch of road' : ''}</p>
+      <div class="list wrap">
+        <a class="row ${cur === 'fast' ? 'sel' : ''}" href="#" data-ro="fast"><span class="i">🛣️</span><span class="t"><b>Fastest route ${cur === 'fast' ? '✓' : ''}</b><small>Interstates and major highways allowed</small></span><span class="chev">›</span></a>
+        <a class="row ${cur === 'back' ? 'sel' : ''}" href="#" data-ro="back"><span class="i">🌾</span><span class="t"><b>Back roads ${cur === 'back' ? '✓' : ''}</b><small>Stays off interstates and big US highways — state routes and county roads</small></span><span class="chev">›</span></a>
+        <a class="row" href="#" data-ro="avoid"><span class="i">🚧</span><span class="t"><b>Avoid the road ahead</b><small>Traffic, accident or closure — detour around the next ${Geo.fmtDist(aheadM, u)} of ${esc(road === 'the road ahead' ? 'your route' : road)}</small></span><span class="chev">›</span></a>
+        ${nAv ? `<a class="row" href="#" data-ro="clear"><span class="i">↩️</span><span class="t"><b>Clear detours</b><small>Allow the roads you chose to avoid again</small></span><span class="chev">›</span></a>` : ''}
+      </div>
+      <p class="small" id="roMsg"></p>
+      <div class="box small muted" style="margin-top:8px">Missed a turn? You don't need to do anything — the route recalculates by itself a few seconds after you leave it.</div>
+      <div class="btnrow"><button class="btn" id="roClose">Close</button></div>`);
+    $('#roClose').onclick = closeSheet;
+    document.querySelectorAll('[data-ro]').forEach(a => a.onclick = e => {
+      e.preventDefault(); const k = a.dataset.ro; if (routing) return;
+      if (!pos) return toast('Waiting for a GPS fix');
+      const before = p ? p.eta : navRoute.time; let opt = {}, label = '';
+      if (k === 'fast' || k === 'back') { if (k === cur) return closeSheet(); routePref = k; store.set('routePref', k); opt = { pref: k }; label = k === 'back' ? 'Taking back roads' : 'Taking the fastest route'; }
+      else if (k === 'avoid') { const av = routeAhead(150, aheadM); if (!av) return toast('Nothing ahead to avoid'); opt = { addAvoid: av }; label = 'Detouring around ' + spoken(road); }
+      else { opt = { avoid: null }; label = 'Detours cleared'; }
+      $('#roMsg').innerHTML = '⏳ Working out a new route…';
+      const diffOf = r => { const d = Math.round((r.time - before) / 60); return Math.abs(d) < 1 ? 'about the same time' : Math.abs(d) + (Math.abs(d) === 1 ? ' minute ' : ' minutes ') + (d > 0 ? 'longer' : 'faster'); };
+      reroute(opt, r => label + ', ' + diffOf(r)).then(r => {
+        if (!r) return; closeSheet();
+        toast((k === 'back' ? '🌾 ' : k === 'fast' ? '🛣️ ' : k === 'avoid' ? '🚧 ' : '↩️ ') + label + '. ' + fmtTime(r.time) + ', ' + diffOf(r) + '.');
+      }).catch(err => { const m = $('#roMsg'); if (m) m.innerHTML = '⚠️ ' + esc(err.message); });
+    });
   }
   function showRouteSummary(fresh) {
     if (!navRoute || !target) return;
@@ -990,6 +1050,7 @@
       <p class="small muted">${parts}${navRoute.mode === 'car' && !navRoute.haveLocal ? '<br>⚠️ Local roads for this area aren’t downloaded, so the route only uses highways and forest roads near the ends. Download your state in Layers 🗂️ for better routes.' : ''}</p>
       ${fresh && navRoute.mode === 'car' ? `<div class="box info" style="margin-top:6px"><b>Turn-by-turn directions?</b><br><span class="small">Follows you by GPS, shows each turn in large print and reads it aloud. Keeps the screen on.</span>
         <div class="btnrow"><button class="btn pri" id="rsTbt">🧭 Yes, start turn-by-turn</button><button class="btn" id="rsGo">No, just show the route</button></div></div>` : ''}
+      ${navRoute.mode === 'car' ? `<div class="seg" style="margin:8px 0"><button class="btn ${(navRoute.pref || routePref) === 'fast' ? 'pri' : ''}" data-rp="fast">🛣️ Fastest</button><button class="btn ${(navRoute.pref || routePref) === 'back' ? 'pri' : ''}" data-rp="back">🌾 Back roads</button>${tbt ? '<button class="btn" id="rsOpts">🚧 Detour…</button>' : ''}</div>` : ''}
       <div id="rsProf" class="small muted">⛰️ Checking elevation…</div>
       <h3>Directions</h3>
       <div class="list">${navRoute.mode === 'car' && navRoute.man ? navRoute.man.slice(0, -1).map((m, i) => `<div class="row"><span class="i tbt-li">${arrowSVG(m)}</span><span class="t"><b>${esc(m.text)}</b><small>then go ${Geo.fmtDist(navRoute.steps[i] ? navRoute.steps[i].dist : 0, u)}</small></span></div>`).join('') : navRoute.steps.map((s, i) => `<div class="row"><span class="i">${i === 0 ? '🚩' : '↪️'}</span><span class="t"><b>${esc(s.name)}</b><small>${kindName[['road', 'trail', 'forest', 'off'].indexOf(s.kind)]} · ${Geo.fmtDist(s.dist, u)}</small></span></div>`).join('')}<div class="row"><span class="i">🏁</span><span class="t"><b>${esc(target.name)}</b></span></div></div>
@@ -1002,6 +1063,15 @@
       if (fresh && pos) { S.lat = pos.lat; S.lon = pos.lon; S.z = navRoute.mode === 'car' ? 14 : 15; follow = true; store.set('mapfollow', true); const b = $('#mLoc'); if (b) b.classList.add('on'); dirty = true; }
     };
     $('#rsEnd').onclick = endNav;
+    const ro = $('#rsOpts'); if (ro) ro.onclick = showRouteOptions;
+    document.querySelectorAll('[data-rp]').forEach(b => b.onclick = () => {
+      const k = b.dataset.rp; if (k === (navRoute.pref || routePref) || routing) return;
+      if (!pos) return toast('Waiting for a GPS fix');
+      routePref = k; store.set('routePref', k); b.textContent = '⏳ ' + b.textContent;
+      const before = navRoute.time;
+      reroute({ pref: k }).then(r => { if (!r) return; const d = Math.round((r.time - before) / 60); toast((k === 'back' ? '🌾 Back roads: ' : '🛣️ Fastest: ') + fmtTime(r.time) + (Math.abs(d) >= 1 ? ' (' + (d > 0 ? '+' : '−') + Math.abs(d) + ' min)' : '')); showRouteSummary(fresh); })
+        .catch(err => toast('⚠️ ' + err.message));
+    });
     const r = navRoute;
     (r.profile ? Promise.resolve(r.profile) : routeProfile(r)).then(pr => {
       const el = $('#rsProf'); if (!el) return;
