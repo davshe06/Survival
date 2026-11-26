@@ -81,7 +81,7 @@
         <canvas id="map"></canvas>
         <div class="mapui tl"><button class="iconbtn" id="mSearch" title="Find a place">🔍</button><button class="iconbtn" id="mLayers" title="Layers & offline maps">🗂️</button></div>
         <div class="mapui tr"><a class="iconbtn" href="#/" title="Close map">✕</a><button class="iconbtn" id="mWps" title="Waypoints">📌</button><button class="iconbtn" id="mCar" title="My car — park here / back to car">🚗</button><button class="iconbtn ${recording ? 'on' : ''}" id="mRec" title="Record track">⏺</button></div>
-        <div class="mapui br"><button class="iconbtn" id="mZin" title="Zoom in">＋</button><button class="iconbtn" id="mZout" title="Zoom out">－</button><button class="iconbtn ${follow ? 'on' : ''}" id="mLoc" title="Center on my GPS location">◎</button></div>
+        <div class="mapui br"><button class="iconbtn mnorth" id="mNorth" title="Map orientation: tap for north-up / heading-up" aria-label="Map orientation" hidden><svg viewBox="0 0 40 40"><path d="M20 4 L27 21 H13Z" fill="#e2574c"/><path d="M20 36 L13 21 H27Z" fill="currentColor" opacity=".55"/><text x="20" y="25" font-size="9" font-weight="800" text-anchor="middle" fill="#fff">N</text></svg></button><button class="iconbtn" id="mZin" title="Zoom in">＋</button><button class="iconbtn" id="mZout" title="Zoom out">－</button><button class="iconbtn ${follow ? 'on' : ''}" id="mLoc" title="Center on my GPS location">◎</button></div>
         ${chipsHTML()}
         <div class="scale" id="mScale"></div>
         <div class="mcomp ${compBig ? 'big' : ''}" id="mComp" role="button" tabindex="0" aria-label="Compass. Tap to make it bigger or smaller.">${compassHTML()}</div>
@@ -99,9 +99,15 @@
     $('#mZin').onclick = () => zoomAt(W / 2, H / 2, 1);
     $('#mZout').onclick = () => zoomAt(W / 2, H / 2, -1);
     $('#mLoc').onclick = () => {
-      if (pos) { follow = !follow; if (follow) { S.lat = pos.lat; S.lon = pos.lon; if (S.z < 12) S.z = 13; } }
-      else { follow = true; toast('Waiting for GPS fix…'); }
-      store.set('mapfollow', follow); $('#mLoc').classList.toggle('on', follow); dirty = true;
+      // like Apple Maps: 1st tap follows you (north up), 2nd tap turns the map with your direction of travel, 3rd back to north up
+      if (!follow) { follow = true; if (rotMode === 'free') setRotMode('north'); if (pos) { S.lat = pos.lat; S.lon = pos.lon; if (S.z < 12) S.z = 13; } else toast('Waiting for GPS fix…'); }
+      else if (rotMode !== 'heading') { setRotMode('heading'); if (tbt) store.set('navNorthUp', false); toast('Map turns with your direction of travel'); }
+      else { setRotMode('north'); if (tbt) store.set('navNorthUp', true); toast('North up'); }
+      store.set('mapfollow', follow); dirty = true;
+    };
+    $('#mNorth').onclick = () => {
+      if (rotMode === 'north' && tbt) { setRotMode('heading'); store.set('navNorthUp', false); if (!follow) { follow = true; store.set('mapfollow', true); if (pos) { S.lat = pos.lat; S.lon = pos.lon; } } toast('Heading up'); }
+      else { setRotMode('north'); if (tbt) store.set('navNorthUp', true); toast('North up'); }
     };
     bindChips();
     $('#mRec').onclick = toggleRec; $('#mCar').onclick = carSheet;
@@ -191,12 +197,66 @@
     DPR = Math.min(window.devicePixelRatio || 1, 2.5);
     W = canvas.clientWidth; H = canvas.clientHeight; canvas.width = W * DPR; canvas.height = H * DPR; dirty = true;
   }
-  function loop() { raf = requestAnimationFrame(loop); if (dirty) { dirty = false; draw(); } }
+  function loop(t) {
+    raf = requestAnimationFrame(loop);
+    const dt = Math.min(120, Math.max(0, t - (lastT || t))); lastT = t; const k = 1 - Math.exp(-dt / 260);
+    // ease the map's rotation toward the direction of travel (shortest way round)
+    const tr = rotTarget(); S.b = S.b || 0;
+    if (tr != null) { const d = ((tr - S.b) % 360 + 540) % 360 - 180; if (Math.abs(d) > .1) { S.b = (S.b + (Math.abs(d) < .4 ? d : d * k) + 360) % 360; dirty = true; } else if (d) { S.b = (tr + 360) % 360; dirty = true; } }
+    // heading-up: put you lower on screen so more of the road ahead is visible
+    const oyT = headingUp() ? H * (tbt ? .2 : .14) : 0;
+    if (!follow) { if (oy) { oy = 0; dirty = true; } }
+    else if (Math.abs(oyT - oy) > .5) { oy += (oyT - oy) * k; dirty = true; } else if (oy !== oyT) { oy = oyT; dirty = true; }
+    if (dirty) { dirty = false; draw(); }
+  }
+  let lastT = 0, lastTH = null, northDisp = 0;
+  // 'north' = north-up, 'heading' = turn the map with your direction of travel (while following GPS), 'free' = rotated by hand
+  let rotMode = store.get('maprot', 'north');
+  function setRotMode(m) { rotMode = m; store.set('maprot', m); dirty = true; }
+  const headingUp = () => rotMode === 'heading' && follow && !!pos;
+  function travelHeading() {
+    if (!pos) return lastTH;
+    const gpsOK = pos.hdg != null && !isNaN(pos.hdg) && pos.hdg >= 0;
+    if (gpsOK && pos.spd > 2) return lastTH = pos.hdg;                       // driving / cycling: GPS course is steady
+    if (tbt && navRoute) { const p = routeProgress(); if (p && p.off < 40) { const a = ptAt(navRoute, p.s), b = ptAt(navRoute, p.s + 30); if (Geo.dist(a, b) > 3) return lastTH = Geo.bearing(a, b); } } // stopped on the route: face along it
+    if (hdgSrc === 'compass' && heading != null) return lastTH = heading;  // walking / standing: phone compass
+    if (gpsOK && pos.spd > .7) return lastTH = pos.hdg;
+    return lastTH;
+  }
+  function rotTarget() { if (rotMode === 'north') return 0; if (headingUp()) return travelHeading(); return null; }
+  function updLocBtn() { const b = $('#mLoc'); if (!b) return; b.classList.toggle('on', follow); const hu = rotMode === 'heading' && follow; if (b.classList.contains('hd') !== hu || !b.firstElementChild) b.innerHTML = hu ? '<span class="lochd">➤</span>' : '<span>◎</span>'; b.classList.toggle('hd', hu); b.title = hu ? 'Following — map turns with you (tap for north-up)' : follow ? 'Following — north up (tap to turn the map with you)' : 'Center on my GPS location'; }
+  function updNorth() {
+    updLocBtn(); const n = $('#mNorth'); if (!n) return;
+    const show = Math.abs(((S.b || 0) + 180) % 360 - 180) > .5 || rotMode !== 'north' || tbt;
+    n.hidden = !show; if (!show) return;
+    northDisp += ((-(S.b || 0) - northDisp) % 360 + 540) % 360 - 180; // unwrapped, so it never spins the long way round
+    n.firstElementChild.style.transform = `rotate(${northDisp}deg)`;
+    n.classList.toggle('on', headingUp());
+  }
 
   // world size in px at zoom
   const ws = () => 256 * Math.pow(2, S.z);
-  function toScreen(X, Y) { const w = ws(); return [(X - mx(S.lon)) * w + W / 2, (Y - my(S.lat)) * w + H / 2]; }
-  function toWorld(px, py) { const w = ws(); return [(px - W / 2) / w + mx(S.lon), (py - H / 2) / w + my(S.lat)]; }
+  // Map rotation: S.b is the compass bearing at the top of the screen (0 = north-up). The map centre (S.lat/S.lon)
+  // sits at the pivot (W/2, H/2 + oy); oy pushes your position lower on screen in heading-up mode so you see more road ahead.
+  // Geometry is drawn in "unrotated" coordinates under a rotated canvas transform (geoPhase); markers and labels use
+  // fully-transformed screen coordinates so they stay upright.
+  let rc = 1, rs = 0, oy = 0, geoPhase = false;
+  function setRot() { const a = -(S.b || 0) * D2R; rc = Math.cos(a); rs = Math.sin(a); }
+  function toScreen(X, Y) {
+    const w = ws(), dx = (X - mx(S.lon)) * w, dy = (Y - my(S.lat)) * w;
+    if (geoPhase) return [dx + W / 2, dy + H / 2];
+    return [W / 2 + dx * rc - dy * rs, H / 2 + oy + dx * rs + dy * rc];
+  }
+  function toWorld(px, py) {
+    const w = ws(), ex = px - W / 2, ey = py - H / 2 - oy;
+    return [(ex * rc + ey * rs) / w + mx(S.lon), (-ex * rs + ey * rc) / w + my(S.lat)];
+  }
+  function geoTransform() { ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(W / 2, H / 2 + oy); ctx.rotate(-(S.b || 0) * D2R); ctx.translate(-W / 2, -H / 2); geoPhase = true; }
+  function plainTransform() { ctx.setTransform(DPR, 0, 0, DPR, 0, 0); geoPhase = false; }
+  function viewBox() { // world bounding box of the (possibly rotated) screen
+    const c = [toWorld(0, 0), toWorld(W, 0), toWorld(0, H), toWorld(W, H)];
+    return [Math.min(...c.map(p => p[0])), Math.min(...c.map(p => p[1])), Math.max(...c.map(p => p[0])), Math.max(...c.map(p => p[1]))];
+  }
 
   // ---------- drawing ----------
   function pathRing(r, close) {
@@ -207,9 +267,10 @@
   }
   function visible(bb, vb) { return !(bb[2] < vb[0] || bb[0] > vb[2] || bb[3] < vb[1] || bb[1] > vb[3]); }
   function draw() {
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    setRot(); plainTransform();
     ctx.fillStyle = colors.water; ctx.fillRect(0, 0, W, H);
-    const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H); const vb = [x0, y0, x1, y1];
+    const vb = viewBox();
+    geoTransform();
     const z = S.z;
     let tilesDrawn = false;
     if (tilesOn) tilesDrawn = drawTiles(vb);
@@ -245,22 +306,25 @@
         if (z >= 4.5) { ctx.beginPath(); for (const f of MD.roads) if (f.k === 1 && visible(f.bb, vb)) for (const r of f.r) pathRing(r); ctx.strokeStyle = colors.road1; ctx.lineWidth = z > 9 ? 3 : z > 7 ? 2 : 1.3; ctx.stroke(); }
       }
     }
+    plainTransform();
     if (store.get('mapgrid', false)) drawGrid(vb);
     const pts = drawPoints(vb); const pls = MD ? drawPlaces(vb) : [];
     drawTrack(); drawNav(); drawWaypoints(); drawMe();
     if (MD) { drawLabels(vb); drawPlaceLabels(pls); drawDetailLabels(vb, pts); drawContourLabels(); }
-    drawScale();
+    drawScale(); updNorth();
   }
 
   function drawGrid(vb) {
     const z = S.z; const step = z < 6 ? 5 : z < 8 ? 1 : z < 10 ? .5 : z < 12 ? .1 : z < 14 ? .05 : .01;
     const lon0 = Math.floor(ilon(vb[0]) / step) * step, lon1 = ilon(vb[2]); const lat0 = Math.floor(ilat(vb[3]) / step) * step, lat1 = ilat(vb[1]);
     ctx.strokeStyle = colors.grid; ctx.lineWidth = 1; ctx.fillStyle = colors.text; ctx.font = '10px ' + colors.font; ctx.beginPath();
-    for (let lo = lon0; lo <= lon1; lo += step) { const [x] = toScreen(mx(lo), 0); ctx.moveTo(x, 0); ctx.lineTo(x, H); }
-    for (let la = lat0; la <= lat1; la += step) { const [, y] = toScreen(0, my(la)); ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    const seg = (a, b) => { const p = toScreen(a[0], a[1]), q = toScreen(b[0], b[1]); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); };
+    for (let lo = lon0; lo <= lon1; lo += step) seg([mx(lo), vb[1]], [mx(lo), vb[3]]);
+    for (let la = lat0; la <= lat1; la += step) seg([vb[0], my(la)], [vb[2], my(la)]);
     ctx.stroke();
-    for (let lo = lon0; lo <= lon1; lo += step) { const [x] = toScreen(mx(lo), 0); ctx.fillText(lo.toFixed(step < .1 ? 2 : 1) + '°', x + 2, H - 150); }
-    for (let la = lat0; la <= lat1; la += step) { const [, y] = toScreen(0, my(la)); ctx.fillText(la.toFixed(step < .1 ? 2 : 1) + '°', 4, y - 2); }
+    const [, yLab] = toWorld(W / 2, H - 150), [xLab] = toWorld(20, H / 2);
+    for (let lo = lon0; lo <= lon1; lo += step) { const [x, y] = toScreen(mx(lo), yLab); ctx.fillText(lo.toFixed(step < .1 ? 2 : 1) + '°', x + 2, y); }
+    for (let la = lat0; la <= lat1; la += step) { const [x, y] = toScreen(xLab, my(la)); ctx.fillText(la.toFixed(step < .1 ? 2 : 1) + '°', x, y - 2); }
   }
 
   const placed = [];
@@ -310,7 +374,14 @@
     const r = pos.acc / mPerPx;
     if (r > 8) { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fillStyle = colors.me + '22'; ctx.fill(); ctx.strokeStyle = colors.me + '66'; ctx.lineWidth = 1; ctx.stroke(); }
     const h = heading != null ? heading : (pos.hdg != null && !isNaN(pos.hdg) && pos.spd > .5 ? pos.hdg : null);
-    if (h != null) { ctx.save(); ctx.translate(x, y); ctx.rotate(h * D2R); ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(9, -6); ctx.lineTo(-9, -6); ctx.closePath(); ctx.fillStyle = colors.me; ctx.globalAlpha = .7; ctx.fill(); ctx.restore(); }
+    if (headingUp() && (tbt || pos.spd > 2)) {
+      // driving / heading-up: a navigation arrow pointing the way you're travelling
+      const a = ((h != null ? h : S.b) - S.b) * D2R;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(11, 11); ctx.lineTo(0, 5); ctx.lineTo(-11, 11); ctx.closePath();
+      ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 6; ctx.fillStyle = '#fff'; ctx.lineJoin = 'round'; ctx.lineWidth = 6; ctx.strokeStyle = '#fff'; ctx.stroke(); ctx.shadowBlur = 0; ctx.fillStyle = colors.me; ctx.fill(); ctx.restore();
+      return;
+    }
+    if (h != null) { ctx.save(); ctx.translate(x, y); ctx.rotate((h - (S.b || 0)) * D2R); ctx.beginPath(); ctx.moveTo(0, -22); ctx.lineTo(9, -6); ctx.lineTo(-9, -6); ctx.closePath(); ctx.fillStyle = colors.me; ctx.globalAlpha = .7; ctx.fill(); ctx.restore(); }
     ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.fillStyle = '#fff'; ctx.fill(); ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fillStyle = colors.me; ctx.fill();
   }
   function drawWaypoints() {
@@ -506,7 +577,7 @@
   }
   function hitPoint(x, y) {
     if (!WATER) return null; let best = null, bd = 16;
-    const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H);
+    const [x0, y0, x1, y1] = viewBox();
     for (const p of WATER) { if (p.X < x0 || p.X > x1 || p.Y < y0 || p.Y > y1) continue; const [sx, sy] = toScreen(p.X, p.Y); const d = Math.hypot(sx - x, sy - y); if (d < bd) { bd = d; best = p; } }
     return best;
   }
@@ -745,6 +816,7 @@
   function startTbt() {
     if (!navRoute) return; tbt = true; store.set('tbt', true); said = {};
     follow = true; store.set('mapfollow', true); const b = $('#mLoc'); if (b) b.classList.add('on');
+    setRotMode(store.get('navNorthUp', false) ? 'north' : 'heading'); // map turns with the road, like a car GPS
     if (pos) { S.lat = pos.lat; S.lon = pos.lon; } S.z = 16;
     if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => tbtWake = w).catch(() => { });
     try { speechSynthesis.getVoices(); } catch (e) { }
@@ -752,7 +824,7 @@
     speak((m0 ? m0.text + '. ' : '') + (p && p.man && p.man !== m0 ? 'Then in ' + sayDist(p.manDist) + ', ' + lowerFirst(p.man.text) : ''), false);
     closeSheet(); dirty = true; updateHud();
   }
-  function stopTbt() { tbt = false; store.set('tbt', false); if (tbtWake) { tbtWake.release().catch(() => { }); tbtWake = null; } const el = $('#mTbt'); if (el) el.hidden = true; document.body.classList.remove('tbt-on'); }
+  function stopTbt() { if (tbt && rotMode === 'heading') setRotMode('north'); tbt = false; store.set('tbt', false); if (tbtWake) { tbtWake.release().catch(() => { }); tbtWake = null; } const el = $('#mTbt'); if (el) el.hidden = true; document.body.classList.remove('tbt-on'); }
   function updateTbt(p) {
     const el = $('#mTbt'); if (!el) return;
     if (!tbt || !navRoute || !p) { el.hidden = true; document.body.classList.remove('tbt-on'); return; }
@@ -942,6 +1014,7 @@
   }
   function drawRoute() {
     if (!navRoute) return;
+    geoTransform();
     const w = ws(), cx = mx(S.lon), cy = my(S.lat), hw = W / 2, hh = H / 2, n = navRoute.X.length;
     const seg = (from, to, col, width, dash) => { ctx.beginPath(); ctx.moveTo((navRoute.X[from] - cx) * w + hw, (navRoute.Y[from] - cy) * w + hh); for (let i = from + 1; i <= to; i++) ctx.lineTo((navRoute.X[i] - cx) * w + hw, (navRoute.Y[i] - cy) * w + hh); ctx.strokeStyle = col; ctx.lineWidth = width; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]); };
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -952,6 +1025,7 @@
       const k = navRoute.kinds[i - 1], nk = i < n - 1 ? navRoute.kinds[i] : -1;
       if (nk !== k) { seg(start, i, k === 1 ? '#8e44ff' : k === 2 ? '#0fb5a6' : colors.nav, 5.5, k === 3 ? [7, 6] : null); start = i; }
     }
+    plainTransform();
   }
 
   // ---------- raster tiles (optional; cached for offline) ----------
@@ -961,17 +1035,17 @@
     const src = TILE_SOURCES[tilesOn]; if (!src) return false;
     let tz = Math.min(src.max, Math.max(1, Math.round(S.z))); const n = Math.pow(2, tz);
     const tx0 = Math.floor(vb[0] * n), tx1 = Math.floor(vb[2] * n), ty0 = Math.floor(vb[1] * n), ty1 = Math.floor(vb[3] * n);
-    const size = ws() / n; let all = true, any = false;
+    const size = ws() / n, pad = S.b ? 1 : .5; let all = true, any = false;
     for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) {
       const [sx, sy] = toScreen(tx / n, ty / n);
       const img = getTile(tilesOn, tz, tx, ty);
-      if (img && img.complete && img.naturalWidth) { ctx.drawImage(img, sx, sy, size + .5, size + .5); any = true; }
+      if (img && img.complete && img.naturalWidth) { ctx.drawImage(img, sx, sy, size + pad, size + pad); any = true; }
       else {
         all = false;
         // fallback: scaled parent tile
         for (let pz = tz - 1, k = 2; pz >= Math.max(1, tz - 5); pz--, k *= 2) {
           const p = tileImgs.get(tilesOn + '/' + pz + '/' + Math.floor(tx / k) + '/' + Math.floor(ty / k));
-          if (p && p.complete && p.naturalWidth) { const sw = 256 / k; ctx.drawImage(p, (tx % k) * sw, (ty % k) * sw, sw, sw, sx, sy, size + .5, size + .5); any = true; break; }
+          if (p && p.complete && p.naturalWidth) { const sw = 256 / k; ctx.drawImage(p, (tx % k) * sw, (ty % k) * sw, sw, sw, sx, sy, size + pad, size + pad); any = true; break; }
         }
       }
     }
@@ -988,7 +1062,7 @@
     return img.failed ? null : img;
   }
   async function downloadArea(src, maxZ, onProg) {
-    const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H);
+    const [x0, y0, x1, y1] = viewBox();
     const list = [];
     maxZ = Math.min(maxZ, TILE_SOURCES[src].max);
     for (let z = Math.max(TILE_SOURCES[src].overlay ? 10 : 1, Math.floor(S.z) - 4); z <= maxZ; z++) {
@@ -1103,12 +1177,13 @@
 
   // ---------- gestures ----------
   function bindGestures() {
-    const ptrs = new Map(); let lastDist = 0, lastMid = null, pressT = null, moved = false, lastTap = 0, downAt = null;
+    const ptrs = new Map(); let lastDist = 0, lastMid = null, pressT = null, moved = false, lastTap = 0, downAt = null, lastAng = null, twist = 0, twisting = false;
+    const ang = p => Math.atan2(p[1][1] - p[0][1], p[1][0] - p[0][0]) / D2R;
     canvas.addEventListener('pointerdown', e => {
       canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); moved = false; downAt = [e.clientX, e.clientY];
       if (ptrs.size === 1) {
         clearTimeout(pressT); pressT = setTimeout(() => { if (!moved && ptrs.size === 1) longPress(e.clientX, e.clientY); }, 650);
-      } else { clearTimeout(pressT); const p = [...ptrs.values()]; lastDist = Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]); lastMid = [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2]; }
+      } else { clearTimeout(pressT); const p = [...ptrs.values()]; lastDist = Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]); lastMid = [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2]; lastAng = ang(p); twist = 0; twisting = false; }
     });
     canvas.addEventListener('pointermove', e => {
       if (!ptrs.has(e.pointerId)) return; const prev = ptrs.get(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]);
@@ -1118,11 +1193,18 @@
         const p = [...ptrs.values()]; const d = Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]); const mid = [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2];
         if (lastMid) pan(mid[0] - lastMid[0], mid[1] - lastMid[1]);
         if (lastDist) zoomAt(mid[0] - canvas.getBoundingClientRect().left, mid[1] - canvas.getBoundingClientRect().top, Math.log2(d / lastDist), true);
-        lastDist = d; lastMid = mid;
+        // two-finger twist rotates the map (after a small dead zone so pinching doesn't spin it)
+        const a = ang(p);
+        if (lastAng != null) {
+          const da = ((a - lastAng) % 360 + 540) % 360 - 180; twist += da;
+          if (!twisting && Math.abs(twist) > 14) { twisting = true; setRotMode('free'); }
+          if (twisting) { const r = canvas.getBoundingClientRect(), px = mid[0] - r.left, py = mid[1] - r.top, before = toWorld(px, py); S.b = ((S.b || 0) - da + 360) % 360; setRot(); if (!follow) { const after = toWorld(px, py); S.lon = ilon(mx(S.lon) + before[0] - after[0]); S.lat = ilat(my(S.lat) + before[1] - after[1]); } dirty = true; }
+        }
+        lastDist = d; lastMid = mid; lastAng = a;
       }
     });
     const up = e => {
-      clearTimeout(pressT); ptrs.delete(e.pointerId); if (ptrs.size < 2) { lastDist = 0; lastMid = null; }
+      clearTimeout(pressT); ptrs.delete(e.pointerId); if (ptrs.size < 2) { lastDist = 0; lastMid = null; lastAng = null; }
       if (!moved && e.type === 'pointerup') {
         const now = Date.now();
         if (now - lastTap < 300) { const r = canvas.getBoundingClientRect(); zoomAt(e.clientX - r.left, e.clientY - r.top, 1); lastTap = 0; }
@@ -1135,8 +1217,13 @@
     canvas.addEventListener('contextmenu', e => e.preventDefault());
   }
   function pan(dx, dy) {
-    if (follow) { follow = false; store.set('mapfollow', false); const b = $('#mLoc'); if (b) b.classList.remove('on'); }
-    const w = ws(); let X = mx(S.lon) - dx / w, Y = my(S.lat) - dy / w; Y = Math.max(0.01, Math.min(.99, Y));
+    if (Math.abs(dx) + Math.abs(dy) < .5) return; // pinching / twisting in place shouldn't stop following
+    if (follow) {
+      // keep the view exactly where it is while the pivot moves back to the middle of the screen
+      if (oy) { const [cX, cY] = toWorld(W / 2, H / 2); S.lon = ilon(cX); S.lat = ilat(cY); oy = 0; }
+      follow = false; store.set('mapfollow', false); updLocBtn();
+    }
+    const w = ws(), ux = dx * rc + dy * rs, uy = -dx * rs + dy * rc; let X = mx(S.lon) - ux / w, Y = my(S.lat) - uy / w; Y = Math.max(0.01, Math.min(.99, Y));
     S.lon = ilon(X); S.lat = ilat(Y); dirty = true;
   }
   function zoomAt(px, py, dz, smooth) {
@@ -1250,7 +1337,7 @@
       <p class="small muted">Contour lines are calculated on your phone from terrain data — choose “Terrain” above and download the area to use contours and elevation offline. Roads & trails: USGS National Transportation Dataset (U.S. Census TIGER, U.S. Forest Service, NPS). Springs, falls, lakes & peaks: USGS GNIS. Map tiles: USGS The National Map (public domain). OpenStreetMap tiles are shown only while online / as you view them (© OpenStreetMap contributors). Built‑in map: Natural Earth, U.S. Census.</p>`);
     $('#lyr').onchange = () => { tilesOn = $('#lyr').value; store.set('maptiles', tilesOn); dirty = true; };
     $('#grd').onchange = () => { store.set('mapgrid', $('#grd').checked); dirty = true; };
-    const est = () => { const [x0, y0] = toWorld(0, 0), [x1, y1] = toWorld(W, H); let n = 0; for (let z = Math.max(1, Math.floor(S.z) - 4); z <= +$('#dlz').value; z++) { const k = Math.pow(2, z); n += (Math.floor(x1 * k) - Math.floor(x0 * k) + 1) * (Math.floor(y1 * k) - Math.floor(y0 * k) + 1); } $('#dlEst').textContent = `≈ ${n.toLocaleString()} tiles, ~${Math.round(n * 0.025)} MB. ${n > 6000 ? '⚠️ Too many — zoom in first.' : ''}`; };
+    const est = () => { const [x0, y0, x1, y1] = viewBox(); let n = 0; for (let z = Math.max(1, Math.floor(S.z) - 4); z <= +$('#dlz').value; z++) { const k = Math.pow(2, z); n += (Math.floor(x1 * k) - Math.floor(x0 * k) + 1) * (Math.floor(y1 * k) - Math.floor(y0 * k) + 1); } $('#dlEst').textContent = `≈ ${n.toLocaleString()} tiles, ~${Math.round(n * 0.025)} MB. ${n > 6000 ? '⚠️ Too many — zoom in first.' : ''}`; };
     $('#dlz').onchange = est; est();
     $('#dlGo').onclick = async () => {
       if (!navigator.onLine) return toast('You need internet to download maps');

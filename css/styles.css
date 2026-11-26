@@ -369,3 +369,9 @@ body.tbt-on .mchips, body.tbt-on .mapui.tl, body.tbt-on .mapui.tr, body.tbt-on .
 body.tbt-on .mcomp { top: auto; bottom: calc(150px + var(--safe-bottom)); }
 :root[data-theme="red"] .tbt { background: #3a0000; color: #ff453a; } :root[data-theme="red"] .tbt-arrow { color: #ff453a; }
 .tbt-next .tbt-flag { font-size: 18px; }
+
+/* map orientation (north-up / heading-up) */
+.iconbtn.mnorth { padding: 0; }
+.iconbtn.mnorth svg { width: 30px; height: 30px; transition: transform .12s linear; color: var(--text); }
+.iconbtn.mnorth.on { border-color: var(--accent); }
+#mLoc .lochd { display: inline-block; font-size: 19px; transform: rotate(-45deg); }
