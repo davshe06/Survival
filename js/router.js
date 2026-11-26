@@ -49,6 +49,13 @@ function speedKmh(mode, f) {
   if (f.layer === 'trails') return 4;
   return 5;
 }
+// 'back' = back roads: interstates and big US highways cost a lot more, so state routes and county roads win
+function prefFactor(pref, f) {
+  if (pref !== 'back' || f.layer !== 'major') return 1;
+  if (f.k === 3) return 3;                    // ramps (only interstates/freeways have them)
+  if (f.k === 1) return /^I-/.test(f.n) ? 4 : 1.8;
+  return 1;
+}
 const OFFROAD_KMH = 2;   // walking cross-country to reach the nearest road/trail
 const BUSHWHACK_KMH = 0.6; // long cross-country shortcuts (thick brush, steep terrain) — only when trails don't connect
 
@@ -65,7 +72,7 @@ class Heap {
   get size() { return this.k.length; }
 }
 
-async function findRoute({ mode, from, to, states }) {
+async function findRoute({ mode, from, to, states, pref, avoid, hdg }) {
   const fx = Math.round(from.lon * SCALE), fy = Math.round(from.lat * SCALE), tx = Math.round(to.lon * SCALE), ty = Math.round(to.lat * SCALE);
   LATK = 1.11195 * Math.cos(((from.lat + to.lat) / 2) * D2R);
   const straight = dist(fx, fy, tx, ty);
@@ -74,7 +81,8 @@ async function findRoute({ mode, from, to, states }) {
   const padX = pad / LATK, padY = pad / metresPerUnitY;
   const box = [Math.min(fx, tx) - padX, Math.min(fy, ty) - padY, Math.max(fx, tx) + padX, Math.max(fy, ty) + padY];
   // for long drives, only use local roads near the two ends
-  const nearEnds = mode === 'car' && straight > 40000 ? 8000 : Infinity;
+  // (back roads: use the whole local network on medium trips, and a wider area around both ends on long ones)
+  const nearEnds = mode === 'car' && straight > (pref === 'back' ? 60000 : 40000) ? (pref === 'back' ? 15000 : 8000) : Infinity;
   const nearBox = (x, y) => [x - nearEnds / LATK, y - nearEnds / metresPerUnitY, x + nearEnds / LATK, y + nearEnds / metresPerUnitY];
   const endBoxes = [nearBox(fx, fy), nearBox(tx, ty)];
   const hit = (bb, b) => !(bb[2] < b[0] || bb[0] > b[2] || bb[3] < b[1] || bb[1] > b[3]);
@@ -93,18 +101,24 @@ async function findRoute({ mode, from, to, states }) {
       const sp = speedKmh(mode, f); if (!sp) continue;
       if (!hit(f.bb, box)) continue;
       if (f.layer === 'local' && nearEnds !== Infinity && !endBoxes.some(b => hit(f.bb, b))) continue;
-      const ai = attrs.length; attrs.push([f.layer, f.n, f.k]); lines++;
+      const ai = attrs.length; attrs.push([f.layer, f.n, f.k, prefFactor(pref, f)]); lines++;
       const p = f.pts; let prev = node(p[0], p[1]);
       if (mode === 'foot' && f.layer === 'trails') lineEnds.push(prev, node(p[p.length - 2], p[p.length - 1]));
       for (let i = 2; i < p.length; i += 2) {
         const cur = node(p[i], p[i + 1]); if (cur === prev) continue;
         const L = dist(p[i - 2], p[i - 1], p[i], p[i + 1]);
-        eA.push(prev); eB.push(cur); eLen.push(L); eCost.push(L / (sp / 3.6)); eAttr.push(ai); prev = cur;
+        eA.push(prev); eB.push(cur); eLen.push(L); eCost.push(L / (sp / 3.6) * prefFactor(pref, f)); eAttr.push(ai); prev = cur;
       }
     }
   }
   if (!nx.length) throw new Error(mode === 'car' ? 'No roads found in this area' : 'No roads or trails found in this area');
-  const N = nx.length;
+  const N = nx.length, avoided = new Set();
+  // detour: stay off a stretch of road (traffic, accident, closure). avoid = flat [x, y, ...] in 1e-5 degrees
+  if (avoid && avoid.length) {
+    const bad = new Uint8Array(N); let nb = 0;
+    for (let i = 0; i < avoid.length; i += 2) { const id = idOf.get((avoid[i] + 2e7) * 1e7 + avoid[i + 1]); if (id !== undefined) { bad[id] = 1; nb++; } }
+    if (nb) for (let e = 0; e < eA.length; e++) if (bad[eA[e]] && bad[eB[e]]) { eCost[e] *= 12; avoided.add(e); }
+  }
 
   // ---- spatial grid of nodes (~50 m cells) ----
   const CELL = 45; // units of 1e-5 deg ≈ 50 m (lat)
@@ -189,7 +203,9 @@ async function findRoute({ mode, from, to, states }) {
   if (!sc.length) throw new Error('No ' + (mode === 'car' ? 'roads' : 'roads or trails') + ' within 8 km of your start');
   if (!tc.length) throw new Error('No ' + (mode === 'car' ? 'roads' : 'roads or trails') + ' within 8 km of the destination');
   const offKmh = OFFROAD_KMH;
-  for (const [d, j] of sc) { eA.push(S); eB.push(j); eLen.push(d); eCost.push(d / (offKmh / 3.6)); eAttr.push(offAttr); }
+  // driving and rerouting: prefer carrying on the way you're heading over turning round (≈ a minute for a U-turn)
+  const behind = j => { if (hdg == null || mode !== 'car') return 0; const b = Math.atan2((nx[j] - fx) * LATK, (ny[j] - fy) * metresPerUnitY) / D2R, d = Math.abs(((b - hdg) % 360 + 540) % 360 - 180); return d > 100 && dist(fx, fy, nx[j], ny[j]) > 12 ? 60 : 0; };
+  for (const [d, j] of sc) { eA.push(S); eB.push(j); eLen.push(d); eCost.push(d / (offKmh / 3.6) + behind(j)); eAttr.push(offAttr); }
   for (const [d, j] of tc) { eA.push(j); eB.push(T); eLen.push(d); eCost.push(d / (offKmh / 3.6)); eAttr.push(offAttr); }
   // direct cross-country option for very short trips
   if (straight < 1500) { eA.push(S); eB.push(T); eLen.push(straight); eCost.push(straight / (offKmh / 3.6)); eAttr.push(offAttr); }
@@ -231,10 +247,10 @@ async function findRoute({ mode, from, to, states }) {
   for (let i = 0; i < pathN.length; i++) {
     const n = pathN[i]; coords.push(ny[n] / SCALE, nx[n] / SCALE);
     if (i < pathE.length) {
-      const e = pathE[i], [layer, rawName, kk] = attrs[eAttr[e]]; const name = layer === 'major' && kk === 3 ? 'Ramp' : rawName;
+      const e = pathE[i], [layer, rawName, kk] = attrs[eAttr[e]]; if (i === 0 && eA[e] === S) time -= behind(eB[e]); const name = layer === 'major' && kk === 3 ? 'Ramp' : rawName;
       const kind = layer === 'trails' ? 'trail' : layer === 'off' ? 'off' : layer === 'fs' ? 'forest' : 'road';
       kinds.push(kind === 'road' ? 0 : kind === 'trail' ? 1 : kind === 'forest' ? 2 : 3);
-      total += eLen[e]; time += eCost[e]; byKind[kind] += eLen[e];
+      total += eLen[e]; time += eCost[e] / (attrs[eAttr[e]][3] || 1) / (avoided.has(e) ? 12 : 1); byKind[kind] += eLen[e];
       const label = kind === 'off' ? (i === 0 ? (mode === 'car' ? 'Head to the road' : 'Walk cross-country to the route') : i === pathE.length - 1 ? (mode === 'car' ? 'Leave the road for the destination' : 'Walk cross-country to the destination') : 'Cross-country') : (name || (kind === 'trail' ? 'Unnamed trail' : kind === 'forest' ? 'Forest road' : 'Unnamed road'));
       const last = steps[steps.length - 1];
       if (last && last.name === label && last.kind === kind) last.dist += eLen[e]; else steps.push({ name: label, kind, dist: eLen[e], at: coords.length / 2 - 1 });
@@ -248,5 +264,5 @@ async function findRoute({ mode, from, to, states }) {
     if (last && last.kind !== 'off' && last.dist < 120 && st.kind === last.kind && tidy.length > 1) { const prev = tidy[tidy.length - 2]; if (prev.kind !== 'off') { prev.dist += last.dist; tidy.pop(); } }
     tidy.push(Object.assign({}, st));
   }
-  return { coords, kinds, total, time, byKind, steps: tidy.filter(s => s.dist > 10), straight, haveLocal, nodes: N, visited, lines };
+  return { coords, kinds, total, time, byKind, pref: pref || 'fast', avoided: avoided.size, steps: tidy.filter(s => s.dist > 10), straight, haveLocal, nodes: N, visited, lines };
 }
