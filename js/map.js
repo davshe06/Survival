@@ -823,65 +823,90 @@
   // ---------- turn-by-turn ----------
   let tbt = store.get('tbt', false), voiceOn = store.get('tbtVoice', true), said = {}, tbtWake = null, lastSpeak = 0;
   const lowerFirst = t => t.charAt(0).toLowerCase() + t.slice(1);
-  function spoken(t) { // read road names the way people say them
-    return t.replace(/\bI-(\d+)((?:[,/]\d+)*)/g, (m, a, b) => 'Interstate ' + a + (b ? ' and ' + b.slice(1).split(/[,/]/).join(' and ') : ''))
-      .replace(/\bUS-(?:Bus,|Byp,|Alt,)?(\d+)(?:[,/][\w]+)*/g, 'U.S. $1').replace(/\bSR-(\d+)(?:[,/][\w]+)*/g, 'State Route $1')
-      .replace(/\bSt\b/g, 'Street').replace(/\bRd\b/g, 'Road').replace(/\bAve\b/g, 'Avenue').replace(/\bDr\b/g, 'Drive').replace(/\bBlvd\b/g, 'Boulevard')
-      .replace(/\bHwy\b/g, 'Highway').replace(/\bLn\b/g, 'Lane').replace(/\bPkwy\b/g, 'Parkway').replace(/\bCt\b/g, 'Court').replace(/\bCir\b/g, 'Circle').replace(/\bTrl\b/g, 'Trail').replace(/\bPl\b/g, 'Place');
+
+  // ---------- voice: short pre-recorded phrases built into the app (no street names), so it works with no signal ----------
+  // data/voice.mp3 holds every clip; data/voice.json says where each one is. A prompt is a few clips joined:
+  // "In 500 feet," + "turn left."  /  "At the traffic light," + "turn left now."  /  "Turn left now." + "Then turn right."
+  let VOICE = null, VOICEBUF = null, voiceLoading = null, navAudio = null, silentURL = null, phoneVoiceOK = null;
+  const voiceEngine = () => store.get('voiceEngine', 'builtin') === 'phone' ? 'phone' : 'builtin';
+  function loadVoice() {
+    if (VOICE) return Promise.resolve(true);
+    return voiceLoading || (voiceLoading = Promise.all([fetch('data/voice.json').then(r => r.json()), fetch('data/voice.mp3').then(r => r.arrayBuffer())])
+      .then(([j, b]) => { VOICE = j; VOICEBUF = b; return true; }).catch(() => { voiceLoading = null; return false; }));
   }
-  // ---------- voice: the phone's own voice when it works, otherwise a voice built into the app (works with no signal) ----------
-  let ttsW = null, ttsReq = 0, ttsAudio = null, phoneVoiceOK = null; const ttsCbs = new Map();
-  const voiceEngine = () => store.get('voiceEngine', 'auto'); // 'auto' | 'phone' | 'builtin'
-  function ttsWorker() {
-    if (!ttsW) { ttsW = new Worker('js/tts-worker.js'); ttsW.onmessage = e => { const cb = ttsCbs.get(e.data.id); ttsCbs.delete(e.data.id); if (cb) cb(e.data); }; ttsW.onerror = () => { ttsW = null; }; }
-    return ttsW;
+  function silentWav(sec) { const n = Math.round(8000 * sec) * 2, b = new ArrayBuffer(44 + n), v = new DataView(b), w = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0))); w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n, true); return URL.createObjectURL(new Blob([b], { type: 'audio/wav' })); }
+  // One audio player for everything: it plays a silent loop while navigating (keeps the app alive in the background and
+  // shows the nav card on the lock screen / Dynamic Island / Android notification) and the voice clips in between.
+  function navEl() {
+    if (!navAudio) {
+      navAudio = new Audio(); navAudio.setAttribute('playsinline', ''); navAudio.preload = 'auto';
+      navAudio.addEventListener('ended', () => { if (navAudio._voice) { navAudio._voice = false; keepAlive(); } });
+    }
+    return navAudio;
   }
-  function audioEl() { if (!ttsAudio) { ttsAudio = new Audio(); ttsAudio.setAttribute('playsinline', ''); ttsAudio.preload = 'auto'; } return ttsAudio; }
-  function silentWav() { const b = new ArrayBuffer(44 + 800), v = new DataView(b), w = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0))); w(0, 'RIFF'); v.setUint32(4, 36 + 800, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, 800, true); return URL.createObjectURL(new Blob([b], { type: 'audio/wav' })); }
-  // iPhone only lets a page play sound after a tap: call this from a tap so later prompts can play by themselves
+  function keepAlive() {
+    const a = navEl(); if (!tbt || a._voice) return;
+    if (!silentURL) silentURL = silentWav(3);
+    if (a.src !== silentURL) { a.loop = true; a.src = silentURL; }
+    const pr = a.play(); if (pr) pr.catch(() => { });
+  }
+  // iPhone only lets a page start sound after a tap: call this from a tap so later prompts can play by themselves
   function unlockAudio() {
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { } // play even with the ring/silent switch on silent
-    try { const a = audioEl(); a.src = silentWav(); const pr = a.play(); if (pr) pr.catch(() => { }); } catch (e) { }
-    try { ttsWorker().postMessage({ id: -1, text: 'ok' }); } catch (e) { } // warm up the built-in voice
-    try { speechSynthesis.getVoices(); } catch (e) { }
+    const a = navEl(); if (!silentURL) silentURL = silentWav(3);
+    if (!a._voice) { a.loop = true; a.src = silentURL; const pr = a.play(); if (pr) pr.catch(() => { }); if (!tbt) setTimeout(() => { if (!tbt && !a._voice) a.pause(); }, 400); }
+    loadVoice(); try { speechSynthesis.getVoices(); } catch (e) { }
   }
-  function speakBuiltin(text) {
-    let w; try { w = ttsWorker(); } catch (e) { return; }
-    const id = ++ttsReq;
-    ttsCbs.set(id, d => {
-      if (d.error || !d.wav || id !== ttsReq) return; // a newer prompt replaced this one
-      const a = audioEl(); if (a._url) URL.revokeObjectURL(a._url);
-      a._url = URL.createObjectURL(new Blob([d.wav], { type: 'audio/wav' })); a.src = a._url; const pr = a.play(); if (pr) pr.catch(() => { });
-    });
-    w.postMessage({ id, text });
+  function playClips(keys) {
+    if (!VOICE) { loadVoice().then(ok => { if (ok) playClips(keys); }); return; }
+    const parts = keys.filter(k => VOICE[k]).map(k => VOICEBUF.slice(VOICE[k][0], VOICE[k][1])); if (!parts.length) return;
+    const a = navEl(); if (a._url) URL.revokeObjectURL(a._url);
+    a._url = URL.createObjectURL(new Blob(parts, { type: 'audio/mpeg' })); a._voice = true; a.loop = false; a.src = a._url;
+    const pr = a.play(); if (pr) pr.catch(() => { a._voice = false; });
   }
+  const clipText = k => VOICE && VOICE[k] ? VOICE[k][2] : '';
   function phoneVoice() {
     let vs = []; try { vs = speechSynthesis.getVoices().filter(v => /^en[-_]US/i.test(v.lang)); } catch (e) { }
-    const local = vs.filter(v => v.localService !== false), pick = n => local.find(v => v.name.indexOf(n) >= 0); // on-device voices only
+    const local = vs.filter(v => v.localService !== false), pick = n => local.find(v => v.name.indexOf(n) >= 0);
     return pick('Samantha') || pick('Alex') || pick('Ava') || local.find(v => v.default) || local[0] || null;
   }
-  function stopSpeech() { try { speechSynthesis.cancel(); } catch (e) { } try { if (ttsAudio) ttsAudio.pause(); } catch (e) { } ttsReq++; }
-  function speak(t, force) {
-    if (!voiceOn && !force) return;
-    const text = spoken(t), eng = voiceEngine(); lastSpeak = Date.now();
+  function stopSpeech() { try { speechSynthesis.cancel(); } catch (e) { } if (navAudio && navAudio._voice) { navAudio._voice = false; navAudio.pause(); keepAlive(); } }
+  // say(['ft500', 'turn_left']) → "In 500 feet, turn left."
+  function say(keys, force) {
+    if (!voiceOn && !force) return; keys = keys.filter(Boolean); if (!keys.length) return; lastSpeak = Date.now();
+    const log = window.FG._said || (window.FG._said = []); log.push(keys.join(' ')); if (log.length > 80) log.shift(); // (for testing)
     const canPhone = typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisUtterance !== 'undefined';
-    // auto: with no signal the phone's voice can stay silent, so use the built-in one; also switch if the phone's voice fails
-    if (!canPhone || eng === 'builtin' || (eng === 'auto' && (phoneVoiceOK === false || navigator.onLine === false))) { stopSpeech(); return speakBuiltin(text); }
-    try {
-      const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; const v = phoneVoice(); if (v) u.voice = v; u.rate = 1;
-      let started = false, fell = false; const fall = () => { if (started || fell || eng !== 'auto') return; fell = true; phoneVoiceOK = false; speakBuiltin(text); };
-      u.onstart = () => { started = true; phoneVoiceOK = true; };
-      u.onerror = ev => { if (ev && (ev.error === 'interrupted' || ev.error === 'canceled')) return; fall(); };
-      stopSpeech(); speechSynthesis.speak(u);
-      if (eng === 'auto') setTimeout(() => { let busy = false; try { busy = speechSynthesis.speaking; } catch (e) { } if (!started && !busy) fall(); }, 1600);
-    } catch (e) { speakBuiltin(text); }
+    if (voiceEngine() !== 'phone' || !canPhone || navigator.onLine === false || phoneVoiceOK === false) { stopSpeech(); return playClips(keys); }
+    loadVoice().then(() => {
+      const text = keys.map(clipText).join(' ').replace(/,\s+(\w)/g, (m, c) => ', ' + c.toLowerCase()); if (!text) return playClips(keys);
+      try {
+        const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; const v = phoneVoice(); if (v) u.voice = v;
+        let started = false, fell = false; const fall = () => { if (started || fell) return; fell = true; phoneVoiceOK = false; playClips(keys); };
+        u.onstart = () => { started = true; phoneVoiceOK = true; }; u.onerror = ev => { if (ev && (ev.error === 'interrupted' || ev.error === 'canceled')) return; fall(); };
+        stopSpeech(); speechSynthesis.speak(u);
+        setTimeout(() => { let busy = false; try { busy = speechSynthesis.speaking; } catch (e) { } if (!started && !busy) fall(); }, 1600);
+      } catch (e) { playClips(keys); }
+    });
   }
-  function sayDist(m) { // natural spoken distance
-    if (window.FG.units() === 'met') return m < 950 ? (Math.round(m / 50) * 50 || 50) + ' meters' : (Math.round(m / 100) / 10) + ' kilometers';
-    const mi = m / 1609.34; if (mi < 0.15) return (Math.max(1, Math.round(m * 3.28084 / 100)) * 100) + ' feet';
-    if (mi < 0.35) return 'a quarter mile'; if (mi < 0.65) return 'half a mile'; if (mi < 0.85) return 'three quarters of a mile';
-    if (mi < 1.25) return '1 mile'; return (Math.round(mi * 2) / 2) + ' miles';
+  // phrase keys
+  function distKey(m) {
+    const near = (x, list) => list.reduce((b, y) => Math.abs(y - x) < Math.abs(b - x) ? y : b, list[0]);
+    if (window.FG.units() === 'met') { if (m < 975) return 'm' + Math.min(950, Math.max(50, Math.round(m / 50) * 50)); const k = m / 1000; if (k < 1.25) return 'km1'; if (k <= 10.25) return 'km' + Math.round(k * 2) / 2; return 'km' + near(k, [12, 15, 20, 25, 30, 40, 50]); }
+    const mi = m / 1609.34; if (mi < 0.15) return 'ft' + Math.min(800, Math.max(100, Math.round(m * 3.28084 / 100) * 100));
+    if (mi < 0.35) return 'mi0.25'; if (mi < 0.65) return 'mi0.5'; if (mi < 0.85) return 'mi0.75'; if (mi < 1.25) return 'mi1';
+    if (mi <= 10.25) return 'mi' + Math.round(mi * 2) / 2; return 'mi' + near(mi, [12, 15, 20, 25, 30, 40, 50]);
   }
+  function actKey(m) {
+    const sd = m.side === 'left' || m.side === 'right' ? m.side : '';
+    switch (m.type) {
+      case 'turn': return 'turn_' + (sd || 'right'); case 'slight': return 'bear_' + (sd || 'right'); case 'sharp': return 'sharp_' + (sd || 'right');
+      case 'uturn': return 'uturn'; case 'keep': return 'keep_' + (sd || 'right'); case 'merge': return 'merge'; case 'straight': return 'straight';
+      case 'ramp': return m.exit ? (sd ? 'exit_' + sd : 'exit') : (sd ? 'ramp_' + sd : 'exit');
+      case 'arrive': return 'leave_road'; case 'finish': return sd ? 'dest_' + sd : 'dest_ahead'; default: return '';
+    }
+  }
+  const nowKey = m => VOICE && VOICE[actKey(m) + '_now'] ? actKey(m) + '_now' : actKey(m);
+  const lightKey = m => m.light && /^(turn|slight|sharp|uturn|keep)$/.test(m.type) ? 'at_light' : '';
   function showDist(m) { if (window.FG.units() === 'met') return m < 950 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(1) + ' km'; const ft = m * 3.28084; return ft < 1000 ? Math.round(ft / 10) * 10 + ' ft' : (m / 1609.34).toFixed(m < 16093 ? 1 : 0) + ' mi'; }
   function arrowSVG(m) {
     if (!m) return '';
@@ -892,18 +917,89 @@
     const tip = [ex + hx * 12, ey + hy * 12], l = [ex - hy * 9, ey + hx * 9], rr = [ex + hy * 9, ey - hx * 9];
     return `<svg viewBox="0 0 64 64" class="tbt-arrow"><path d="M32 60 V30 L${ex.toFixed(1)} ${ey.toFixed(1)}" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><path d="M${tip.map(v => v.toFixed(1)).join(' ')} L${l.map(v => v.toFixed(1)).join(' ')} L${rr.map(v => v.toFixed(1)).join(' ')}z" fill="currentColor"/></svg>`;
   }
+  // ---------- nav outside the app: lock screen, Dynamic Island & Android notification (via Now Playing), and a floating mini window ----------
+  // (A true iPhone Live Activity needs a native App Store app; the Now Playing card is the closest a web app can get.)
+  let wInfo = null, wMetaKey = '', pipVideo = null, pipCanvas = null, artCanvas = null;
+  function drawArrow(c, m, x, y, s, col) { // the same arrows as the banner, drawn on a canvas
+    c.save(); c.translate(x, y); c.scale(s / 64, s / 64); c.strokeStyle = c.fillStyle = col; c.lineWidth = 7; c.lineCap = 'round'; c.lineJoin = 'round';
+    if (!m || m.type === 'finish' || m.type === 'arrive') { c.font = '40px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('🏁', 32, 34); c.restore(); return; }
+    if (m.type === 'uturn') { const L = m.angle < 0; c.beginPath(); c.moveTo(L ? 42 : 22, 60); c.lineTo(L ? 42 : 22, 28); if (L) c.arc(32, 28, 10, 0, Math.PI, true); else c.arc(32, 28, 10, Math.PI, 0, false); c.lineTo(L ? 22 : 42, 40); c.stroke(); c.beginPath(); c.moveTo(L ? 12 : 32, 38); c.lineTo(L ? 22 : 42, 52); c.lineTo(L ? 32 : 52, 38); c.closePath(); c.fill(); c.restore(); return; }
+    const a = m.type === 'start' || m.type === 'straight' ? 0 : m.type === 'merge' || m.type === 'ramp' ? (m.angle < 0 ? -40 : 40) : Math.max(-150, Math.min(150, m.angle)), r = a * Math.PI / 180;
+    c.translate(-Math.sin(r) * 12, 6); // keep the arrow visually centred
+    const ex = 32 + 20 * Math.sin(r), ey = 30 - 20 * Math.cos(r), hx = Math.sin(r), hy = -Math.cos(r);
+    c.beginPath(); c.moveTo(32, 60); c.lineTo(32, 30); c.lineTo(ex, ey); c.stroke();
+    c.beginPath(); c.moveTo(ex + hx * 12, ey + hy * 12); c.lineTo(ex - hy * 9, ey + hx * 9); c.lineTo(ex + hy * 9, ey - hx * 9); c.closePath(); c.fill(); c.restore();
+  }
+  function drawPip() {
+    if (!pipCanvas || !wInfo) return; const c = pipCanvas.getContext('2d'), W2 = pipCanvas.width, H2 = pipCanvas.height;
+    c.fillStyle = wInfo.off ? '#8a3b12' : '#17613a'; c.fillRect(0, 0, W2, H2);
+    drawArrow(c, wInfo.m, 18, 30, 150, '#fff');
+    c.fillStyle = '#fff'; c.textBaseline = 'alphabetic'; c.textAlign = 'left';
+    c.font = '800 68px -apple-system, system-ui, sans-serif'; c.fillText(wInfo.dist, 190, 100);
+    c.font = '700 30px -apple-system, system-ui, sans-serif'; let t = wInfo.text; while (c.measureText(t).width > W2 - 205 && t.length > 4) t = t.slice(0, -2); if (t !== wInfo.text) t += '…'; c.fillText(t, 192, 150);
+    c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(0, H2 - 62, W2, 62); c.fillStyle = '#fff'; c.font = '600 28px -apple-system, system-ui, sans-serif'; c.fillText(wInfo.sub, 20, H2 - 21);
+  }
+  // called on every position update while navigating
+  function updateWidget(force) {
+    if (!tbt || !navRoute) return; const p = routeProgress(); if (!p) return;
+    const m = p.man, u = window.FG.units(), d = Math.max(0, p.manDist), off = p.off > offLimit() || routing;
+    const eta = new Date(Date.now() + p.eta * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    wInfo = { m, off, dist: off ? 'Off route' : m && m.type !== 'finish' ? showDist(d) : showDist(p.left), text: off ? 'Recalculating…' : (m && m.light ? '🚦 ' : '') + (m ? m.text : 'Continue'), sub: 'Arrive ' + eta + ' · ' + Geo.fmtDist(p.left, u) + ' · ' + fmtTime(p.eta) };
+    drawPip();
+    if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
+      const key = wInfo.dist + wInfo.text + wInfo.sub; if (key === wMetaKey && !force) return; wMetaKey = key;
+      if (!artCanvas) { artCanvas = document.createElement('canvas'); artCanvas.width = artCanvas.height = 256; }
+      const ac = artCanvas.getContext('2d'); ac.fillStyle = off ? '#8a3b12' : '#17613a'; ac.fillRect(0, 0, 256, 256); drawArrow(ac, m, 28, 28, 200, '#fff');
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({ title: wInfo.dist + ' · ' + wInfo.text, artist: wInfo.sub, album: 'Field Guide navigation', artwork: [{ src: artCanvas.toDataURL('image/png'), sizes: '256x256', type: 'image/png' }] });
+        navigator.mediaSession.playbackState = 'playing';
+      } catch (e) { }
+    }
+  }
+  function setupMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    const h = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (e) { } };
+    h('play', () => keepAlive()); h('pause', () => { voiceOn = !voiceOn; store.set('tbtVoice', voiceOn); toast(voiceOn ? '🔊 Voice on' : '🔇 Voice muted'); keepAlive(); updateHud(); });
+    h('stop', null); h('seekbackward', null); h('seekforward', null); h('previoustrack', null); h('nexttrack', null);
+    h('enterpictureinpicture', () => startPip()); // Chrome/Android: float the mini window automatically when you leave the app
+  }
+  const pipSupported = () => typeof document !== 'undefined' && (document.pictureInPictureEnabled || (typeof HTMLVideoElement !== 'undefined' && 'webkitSetPresentationMode' in HTMLVideoElement.prototype)) && typeof HTMLCanvasElement.prototype.captureStream === 'function';
+  async function startPip() {
+    try {
+      if (!pipCanvas) { pipCanvas = document.createElement('canvas'); pipCanvas.width = 640; pipCanvas.height = 300; }
+      updateWidget(true); drawPip();
+      if (!pipVideo) {
+        pipVideo = document.createElement('video'); pipVideo.muted = true; pipVideo.playsInline = true; pipVideo.setAttribute('playsinline', ''); pipVideo.setAttribute('autopictureinpicture', '');
+        pipVideo.style.cssText = 'position:fixed;left:0;bottom:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:-1';
+        pipVideo.srcObject = pipCanvas.captureStream(4); document.body.appendChild(pipVideo);
+      }
+      await pipVideo.play();
+      if (document.pictureInPictureElement === pipVideo) return;
+      if (pipVideo.requestPictureInPicture) await pipVideo.requestPictureInPicture();
+      else pipVideo.webkitSetPresentationMode('picture-in-picture');
+    } catch (e) { toast('Mini window isn’t available in this browser'); }
+  }
+  function stopWidget() {
+    try { if (document.pictureInPictureElement) document.exitPictureInPicture(); } catch (e) { }
+    if (pipVideo) { try { pipVideo.pause(); pipVideo.srcObject = null; pipVideo.remove(); } catch (e) { } pipVideo = null; }
+    if (navAudio) { navAudio._voice = false; navAudio.pause(); }
+    if ('mediaSession' in navigator) { try { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = 'none'; } catch (e) { } }
+    wMetaKey = '';
+  }
   function startTbt() {
     if (!navRoute) return; tbt = true; store.set('tbt', true); said = {};
     follow = true; store.set('mapfollow', true); const b = $('#mLoc'); if (b) b.classList.add('on');
     setRotMode(store.get('navNorthUp', false) ? 'north' : 'heading'); // map turns with the road, like a car GPS
     if (pos) { S.lat = pos.lat; S.lon = pos.lon; } S.z = 16;
     if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => tbtWake = w).catch(() => { });
-    unlockAudio();
-    const p = routeProgress(), m0 = navRoute.man && navRoute.man[0];
-    speak((m0 ? m0.text + '. ' : '') + (p && p.man && p.man !== m0 ? 'Then in ' + sayDist(p.manDist) + ', ' + lowerFirst(p.man.text) : ''), false);
+    unlockAudio(); setupMediaSession(); setTimeout(keepAlive, 450);
+    const p = routeProgress(), m0 = navRoute.man && navRoute.man[0], first = p && p.man && p.man.type !== 'start' ? p.man : null;
+    if (first) { const k = first.at + ':' + first.type; said[k + 'f'] = 1; if (p.manDist < 200) said[k + 'm'] = 1; }
+    say(['start', m0 && /^Drive to the road/.test(m0.text) ? 'to_road' : '', first ? distKey(Math.max(0, p.manDist)) : '', first ? lightKey(first) : '', first ? actKey(first) : '']);
+    updateWidget(true);
     closeSheet(); dirty = true; updateHud();
   }
-  function stopTbt() { if (tbt && rotMode === 'heading') setRotMode('north'); tbt = false; store.set('tbt', false); if (tbtWake) { tbtWake.release().catch(() => { }); tbtWake = null; } const el = $('#mTbt'); if (el) el.hidden = true; document.body.classList.remove('tbt-on'); }
+  function stopTbt() { if (tbt && rotMode === 'heading') setRotMode('north'); tbt = false; stopWidget(); store.set('tbt', false); if (tbtWake) { tbtWake.release().catch(() => { }); tbtWake = null; } const el = $('#mTbt'); if (el) el.hidden = true; document.body.classList.remove('tbt-on'); }
   function updateTbt(p) {
     const el = $('#mTbt'); if (!el) return;
     if (!tbt || !navRoute || !p) { el.hidden = true; document.body.classList.remove('tbt-on'); return; }
@@ -912,20 +1008,23 @@
     // spoken prompts: far, closer, and at the turn
     if (m && !off) {
       const k = m.at + ':' + m.type, far = Math.max(700, v * 45), mid = Math.max(160, v * 12), now = Math.max(35, v * 4);
-      const then = p.manNext && p.manNext.d - m.d < 200 && p.manNext.type !== 'finish' ? ', then ' + lowerFirst(sayMan(p.manNext)) : '';
-      const fin = m.type === 'finish', finTxt = /^Your destination|, straight/.test(m.text) ? m.text : 'You have arrived at your destination';
-      if (d <= now && !said[k + 'n']) { said[k + 'n'] = said[k + 'm'] = said[k + 'f'] = 1; if (fin) said.arrived = 1; speak(fin ? (finTxt.startsWith('Your') ? 'You have arrived. ' + finTxt : finTxt) : sayMan(m) + then); }
-      else if (d <= mid && d > now && !said[k + 'm']) { said[k + 'm'] = said[k + 'f'] = 1; speak('In ' + sayDist(d) + ', ' + (fin ? (finTxt.startsWith('Your') ? lowerFirst(finTxt) : 'your destination is ahead') : lowerFirst(sayMan(m))) + then); }
-      else if (d <= far && d > mid * 1.5 && !said[k + 'f'] && m.type !== 'straight' && m.type !== 'finish') { said[k + 'f'] = 1; speak('In ' + sayDist(d) + ', ' + lowerFirst(sayMan(m))); }
+      const nx = p.manNext, then = nx && nx.d - m.d < 200 && m.type !== 'finish' ? 'then_' + actKey(nx) : '';
+      const fin = m.type === 'finish';
+      // "Turn left now." / "In 500 feet, turn left." / "At the traffic light, turn left now. Then turn right."
+      if (d <= now && !said[k + 'n']) { said[k + 'n'] = said[k + 'm'] = said[k + 'f'] = 1; if (fin) said.arrived = 1; say(fin ? [m.side ? actKey(m) : 'arrived'] : [lightKey(m), nowKey(m), then]); }
+      else if (d <= mid && d > now && !said[k + 'm']) { said[k + 'm'] = said[k + 'f'] = 1; say([distKey(d), lightKey(m), actKey(m), then]); }
+      else if (d <= far && d > mid * 1.5 && !said[k + 'f'] && m.type !== 'straight' && !fin) { said[k + 'f'] = 1; say([distKey(d), lightKey(m), actKey(m)]); }
     }
     const u = window.FG.units(), eta = new Date(Date.now() + p.eta * 1000);
     el.innerHTML = off ? `<div class="tbt-main tbt-off"><div class="tbt-icon">⚠️</div><div><div class="tbt-dist">${routing && p.off <= offLimit() ? 'Rerouting' : 'Off route'}</div><div class="tbt-text">${routing ? 'Finding a new route from here…' : 'Rerouting… keep driving safely'}</div></div></div>`
       : `<div class="tbt-main"><div class="tbt-icon">${arrowSVG(m)}</div><div class="tbt-body"><div class="tbt-dist">${m && m.type !== 'finish' ? showDist(d) : showDist(p.left)}</div><div class="tbt-text">${m && m.light ? '<span class="tbt-light" title="At the traffic light">🚦</span> ' : ''}${esc(m ? m.text : 'Continue')}</div></div></div>
         ${p.manNext && m && m.type !== 'finish' ? `<div class="tbt-next">Then ${arrowSVG(p.manNext).replace('tbt-arrow', 'tbt-arrow sm')} ${esc(p.manNext.text)}</div>` : ''}`;
-    el.innerHTML += `<div class="tbt-bar"><span><b>${eta.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</b> arrival · ${Geo.fmtDist(p.left, u)} · ${fmtTime(p.eta)}</span><span><button class="btn" id="tbtVoice" aria-label="Voice on or off">${voiceOn ? '🔊' : '🔇'}</button><button class="btn" id="tbtRoute" aria-label="Change route">🔀</button><button class="btn" id="tbtList">☰</button><button class="btn red" id="tbtEnd">✕ End</button></span></div>`;
-    $('#tbtVoice').onclick = () => { voiceOn = !voiceOn; store.set('tbtVoice', voiceOn); unlockAudio(); if (!voiceOn) stopSpeech(); else speak('Voice guidance on', true); updateHud(); };
+    el.innerHTML += `<div class="tbt-bar"><span><b>${eta.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</b> arrival · ${Geo.fmtDist(p.left, u)} · ${fmtTime(p.eta)}</span><span><button class="btn" id="tbtVoice" aria-label="Voice on or off">${voiceOn ? '🔊' : '🔇'}</button><button class="btn" id="tbtRoute" aria-label="Change route">🔀</button>${pipSupported() ? '<button class="btn" id="tbtPip" aria-label="Mini window" title="Floating mini window">⧉</button>' : ''}<button class="btn" id="tbtList">☰</button><button class="btn red" id="tbtEnd">✕ End</button></span></div>`;
+    $('#tbtVoice').onclick = () => { voiceOn = !voiceOn; store.set('tbtVoice', voiceOn); unlockAudio(); if (!voiceOn) stopSpeech(); else say(['voice_on'], true); updateHud(); };
     $('#tbtList').onclick = () => showRouteSummary(false);
     $('#tbtRoute').onclick = showRouteOptions;
+    const pb = $('#tbtPip'); if (pb) pb.onclick = () => { unlockAudio(); keepAlive(); startPip(); };
+    updateWidget();
     $('#tbtEnd').onclick = () => endNav();
     if (pos && follow) { S.z = v > 24 ? 14.6 : v > 13 ? 15.4 : 16.3; }
   }
@@ -944,39 +1043,70 @@
     const f = c[hi] > c[lo] ? (d - c[lo]) / (c[hi] - c[lo]) : 0;
     return { lat: r.coords[lo * 2] + (r.coords[hi * 2] - r.coords[lo * 2]) * f, lon: r.coords[lo * 2 + 1] + (r.coords[hi * 2 + 1] - r.coords[lo * 2 + 1]) * f };
   }
-  // "At the traffic light, turn left onto …" when the turn is at a signal
-  const sayMan = m => m.light && /^(turn|slight|sharp|uturn|straight)$/.test(m.type) ? 'At the traffic light, ' + lowerFirst(m.text) : m.text;
+  // turns at a traffic signal: "At the traffic light, turn left"
   function markLights(r) {
     if (!r || !r.man || r.mode !== 'car') return;
     for (const m of r.man) if (!m.light && m.type !== 'start' && m.type !== 'finish') { const p = { lat: r.coords[m.at * 2], lon: r.coords[m.at * 2 + 1] }; if (nearSignal(p, 35)) m.light = true; }
   }
   function buildManeuvers(r) {
-    const st = r.steps || [], out = [], road = n => !n || /^Unnamed/.test(n) ? '' : n.replace(/^(I|US|SR)-([\w]+(?:,[\w]+)+)$/, (m, a, b) => a + '-' + b.split(',').join('/')).replace(/^US-(Bus|Byp|Alt)\/(\d+)/, 'US-$2 $1');
-    for (let i = 0; i < st.length; i++) {
-      const s = st[i], d0 = r.cum[s.at], nm = road(s.name), next = st[i + 1];
-      if (i === 0) { out.push({ at: s.at, d: d0, type: 'start', angle: 0, name: nm, text: s.kind === 'off' ? 'Drive to the road' : nm ? 'Head out on ' + nm : 'Start driving' }); continue; }
-      const b1 = Geo.bearing(ptAt(r, d0 - 30), ptAt(r, d0)), b2 = Geo.bearing(ptAt(r, d0), ptAt(r, d0 + 30));
-      const a = ((b2 - b1 + 540) % 360) - 180, side = a < 0 ? 'left' : 'right', abs = Math.abs(a), prev = st[i - 1].name;
-      let type, text;
-      if (s.kind === 'off' && i === st.length - 1 && r.mode === 'car' && s.dist < 400) { // short hop from the road to the address: say which side it's on
-        const n = r.cum.length, dest = { lat: r.coords[n * 2 - 2], lon: r.coords[n * 2 - 1] }, rel = ((Geo.bearing(ptAt(r, d0), dest) - b1 + 540) % 360) - 180;
-        out.push({ at: s.at, d: d0, type: 'finish', angle: 0, name: '', text: Math.abs(rel) < 25 || Math.abs(rel) > 155 ? 'Arrive at your destination, straight ahead' : 'Your destination is on the ' + (rel < 0 ? 'left' : 'right') });
-        return out;
+    // Turns come from two places: (1) every intersection the route passes through (from the router) where the
+    // route bends — so small turns are caught even when the road name doesn't change — and forks ("keep left");
+    // (2) road changes such as ramps and merges. Street names are only used for the on-screen text.
+    const st = r.steps || [], out = [], cum = r.cum, n = cum.length;
+    const road = x => !x || /^Unnamed/.test(x) ? '' : x.replace(/^(I|US|SR)-([\w]+(?:,[\w]+)+)$/, (m, a, b) => a + '-' + b.split(',').join('/')).replace(/^US-(Bus|Byp|Alt)\/(\d+)/, 'US-$2 $1');
+    const stepAt = i => { let x = null; for (const y of st) { if (y.at <= i) x = y; else break; } return x; };
+    const turnAt = (d, L) => { const b1 = Geo.bearing(ptAt(r, d - L), ptAt(r, d)), b2 = Geo.bearing(ptAt(r, d), ptAt(r, d + L)); return ((b2 - b1 + 540) % 360) - 180; };
+    const cand = new Map();
+    st.forEach((x, i) => { if (i) cand.set(x.at, Object.assign(cand.get(x.at) || {}, { step: x })); });
+    const haveJx = !!(r.jx && r.jx.length !== undefined);
+    if (haveJx) for (let k = 0; k < r.jx.length; k += 2) cand.set(r.jx[k], Object.assign(cand.get(r.jx[k]) || {}, { jn: true, fork: r.jx[k + 1] }));
+    const s0 = st[0];
+    out.push({ at: 0, d: 0, type: 'start', angle: 0, side: '', name: road(s0 && s0.name), text: s0 && s0.kind === 'off' ? 'Drive to the road' : s0 && road(s0.name) ? 'Head out on ' + road(s0.name) : 'Start driving' });
+    for (const at of [...cand.keys()].sort((x, y) => x - y)) {
+      if (at <= 0 || at >= n - 1) continue;
+      const c = cand.get(at), d0 = cum[at], cur = stepAt(at), prev = stepAt(at - 1), nm = road(cur && cur.name);
+      const curN = cur ? cur.name : '', prevN = prev ? prev.name : '';
+      if (cur && cur.kind === 'off' && cur === st[st.length - 1]) {
+        if (r.mode === 'car' && cur.dist < 400) { // short hop from the road to the address: say which side it's on
+          const b1 = Geo.bearing(ptAt(r, d0 - 30), ptAt(r, d0)), dest = { lat: r.coords[n * 2 - 2], lon: r.coords[n * 2 - 1] }, rel = ((Geo.bearing(ptAt(r, d0), dest) - b1 + 540) % 360) - 180;
+          const ahead = Math.abs(rel) < 25 || Math.abs(rel) > 155;
+          out.push({ at, d: d0, type: 'finish', angle: 0, side: ahead ? '' : rel < 0 ? 'left' : 'right', name: '', text: ahead ? 'Arrive at your destination, straight ahead' : 'Your destination is on the ' + (rel < 0 ? 'left' : 'right') });
+          return out;
+        }
+        out.push({ at, d: d0, type: 'arrive', angle: 0, side: '', name: '', text: 'Leave the road and continue to the destination' }); continue;
       }
-      if (s.kind === 'off') { type = 'arrive'; text = 'Leave the road and continue to the destination'; }
-      else if (s.name === 'Ramp') { const to = next && road(next.name); type = abs < 20 ? 'ramp' : 'ramp'; text = (/^I-|^US-/.test(prev) ? 'Take the exit' : 'Take the ramp') + (abs >= 8 ? ' on the ' + side : '') + (to ? ' toward ' + to : ''); }
-      else if (prev === 'Ramp' && isHwy(nm)) { type = 'merge'; text = 'Merge onto ' + nm; }
-      else if (abs < 25) { type = 'straight'; text = nm ? 'Continue onto ' + nm : 'Continue straight'; }
-      else if (abs < 60) { type = 'slight'; text = 'Bear ' + side + (nm ? ' onto ' + nm : ''); }
-      else if (abs < 135) { type = 'turn'; text = 'Turn ' + side + (nm ? ' onto ' + nm : ''); }
-      else if (abs < 165) { type = 'sharp'; text = 'Make a sharp ' + side + (nm ? ' onto ' + nm : ''); }
-      else { type = 'uturn'; text = 'Make a U-turn' + (nm ? ' onto ' + nm : ''); }
-      out.push({ at: s.at, d: d0, type, angle: type === 'straight' ? 0 : a, name: nm, text });
+      const a = turnAt(d0, 22), abs = Math.abs(a), sideA = a < 0 ? 'left' : 'right', forkSide = c.fork === 1 ? 'left' : c.fork === 2 ? 'right' : '';
+      let m = null;
+      if (curN === 'Ramp' && prevN !== 'Ramp') { // leaving onto a ramp
+        const side = forkSide || (abs >= 8 ? sideA : ''), nxt = st[st.indexOf(cur) + 1], to = nxt && road(nxt.name), exit = isHwy(prevN) && !/^SR-/.test(prevN) || /^I-/.test(prevN);
+        m = { type: 'ramp', exit, angle: side === 'left' ? -30 : side === 'right' ? 30 : 0, side, text: (exit ? 'Take the exit' : 'Take the ramp') + (side ? ' on the ' + side : '') + (to ? ' toward ' + to : '') };
+      } else if (prevN === 'Ramp' && curN !== 'Ramp' && isHwy(curN) && abs < 45) {
+        m = { type: 'merge', angle: a, side: '', text: 'Merge onto ' + (nm || 'the highway') };
+      } else if (abs >= 25) {
+        if (haveJx && !c.jn && abs < 60) continue; // a bend in the road, not a junction
+        if (abs < 45 && curN === prevN && !forkSide) continue; // staying on the same road as it curves through a junction
+        const type = abs < 60 ? 'slight' : abs < 135 ? 'turn' : abs < 165 ? 'sharp' : 'uturn';
+        const verb = type === 'slight' ? 'Bear ' + sideA : type === 'turn' ? 'Turn ' + sideA : type === 'sharp' ? 'Make a sharp ' + sideA : 'Make a U-turn';
+        m = { type, angle: a, side: sideA, text: verb + (nm ? ' onto ' + nm : '') };
+      } else if (forkSide && curN !== prevN) { // a fork where you leave the road you're on (staying on it past exits/side roads needs no prompt)
+        m = { type: 'keep', angle: forkSide === 'left' ? -20 : 20, side: forkSide, text: 'Keep ' + forkSide + (nm ? ' onto ' + nm : curN === 'Ramp' ? '' : '') };
+      } else if (!haveJx && c.step) { m = { type: 'straight', angle: 0, side: '', text: nm ? 'Continue onto ' + nm : 'Continue straight' }; }
+      if (!m) continue;
+      Object.assign(m, { at, d: d0, name: nm });
+      const last = out[out.length - 1];
+      if (last && last.type !== 'start' && d0 - last.d < 25) { // two junctions a few metres apart: one instruction
+        const rank = x => ({ ramp: 5, merge: 4, uturn: 3, sharp: 3, turn: 2, slight: 1, keep: 1 }[x.type] || 0);
+        if (rank(m) > rank(last) || (rank(m) === rank(last) && Math.abs(m.angle) > Math.abs(last.angle))) out[out.length - 1] = m;
+        continue;
+      }
+      out.push(m);
     }
-    const n = r.cum.length; out.push({ at: n - 1, d: r.cum[n - 1], type: 'finish', angle: 0, name: '', text: 'Arrive at your destination' });
+    out.push({ at: n - 1, d: cum[n - 1], type: 'finish', angle: 0, side: '', name: '', text: 'Arrive at your destination' });
     return out;
   }
+
   navRoute = prepRoute(navRoute);
+  window.FG._nav = () => navRoute; window.FG._pip = () => [pipCanvas && pipCanvas.toDataURL(), artCanvas && artCanvas.toDataURL()]; // for testing
   function fmtTime(s) { s = Math.round(s / 60); return s < 60 ? s + ' min' : Math.floor(s / 60) + ' h ' + (s % 60) + ' min'; }
   function statesFor(a, b) {
     if (!SEIDX) return [];
@@ -1023,8 +1153,8 @@
   function setNav(dest, r) {
     target = { lat: dest.lat, lon: dest.lon, name: dest.name, mode: r ? r.mode : 'line' }; store.set('navtarget', target);
     navRoute = prepRoute(r); offRouteCount = 0;
-    store.set('navroute', r ? { mode: r.mode, coords: r.coords, kinds: r.kinds, total: r.total, time: r.time, steps: r.steps, byKind: r.byKind, haveLocal: r.haveLocal, pref: r.pref, avoid: r.avoid } : null);
-    if (navRoute && tbt) { said = {}; if (r.announce) announceNew(r.announce); else if (!r.quiet) speak('Route updated'); }
+    store.set('navroute', r ? { mode: r.mode, coords: r.coords, kinds: r.kinds, total: r.total, time: r.time, steps: r.steps, byKind: r.byKind, haveLocal: r.haveLocal, pref: r.pref, avoid: r.avoid, jx: r.jx } : null);
+    if (navRoute && tbt) { said = {}; if (r.announce) announceNew(r.announce); else if (!r.quiet) say(['route_updated']); }
     else if (navRoute) { // overview: fit the whole route on screen
       let x0 = 1, y0 = 1, x1 = 0, y1 = 0; for (let i = 0; i < navRoute.X.length; i++) { x0 = Math.min(x0, navRoute.X[i]); x1 = Math.max(x1, navRoute.X[i]); y0 = Math.min(y0, navRoute.Y[i]); y1 = Math.max(y1, navRoute.Y[i]); }
       S.lon = ilon((x0 + x1) / 2); S.lat = ilat((y0 + y1) / 2);
@@ -1060,19 +1190,19 @@
   function checkOffRoute() {
     if (!navRoute || !pos || routing) return;
     const p = routeProgress(); if (!p) return;
-    if (Geo.dist(pos, target) < (navRoute.mode === 'car' ? 45 : 30)) { if (tbt && !said.arrived) speak(/^-?\d+\.\d+, *-?\d+\.\d+$/.test(target.name) ? 'You have arrived at your destination' : 'You have arrived at ' + target.name); toast('🏁 You have arrived at ' + target.name); endNav(); return; }
+    if (Geo.dist(pos, target) < (navRoute.mode === 'car' ? 45 : 30)) { if (tbt && !said.arrived) say(['arrive_dest']); toast('🏁 You have arrived at ' + target.name); endNav(); return; }
     // missed a turn: two GPS fixes clearly off the line → reroute straight away from where you are, the way you're heading
     const limit = offLimit();
     offRouteCount = p.off > limit ? offRouteCount + 1 : 0;
     if (offRouteCount >= 2 && Date.now() - lastReroute > 8000) {
-      lastReroute = Date.now(); offRouteCount = 0; if (tbt) speak('Rerouting'); else toast('Off route — finding a new route…');
-      reroute({}, () => 'New route').catch(() => { });
+      lastReroute = Date.now(); offRouteCount = 0; if (tbt) say(['rerouting']); else toast('Off route — finding a new route…');
+      reroute({}, () => ['new_route']).catch(() => { });
     }
   }
-  function announceNew(pre) { // "New route. In 400 feet, turn right onto Oak St"
+  function announceNew(pre) { // "New route. In 400 feet, turn right."
     const q = routeProgress(), m = q && q.man;
-    if (m && m.type !== 'start') { said[m.at + ':' + m.type + 'f'] = 1; if (q.manDist < Math.max(160, (pos.spd || 13) * 12) * 1.2) said[m.at + ':' + m.type + 'm'] = 1; speak(pre + '. In ' + sayDist(Math.max(0, q.manDist)) + ', ' + lowerFirst(sayMan(m))); }
-    else speak(pre + (m ? '. ' + m.text : ''));
+    if (m && m.type !== 'start') { const k = m.at + ':' + m.type; said[k + 'f'] = 1; if (q.manDist < Math.max(160, (pos.spd || 13) * 12) * 1.2) said[k + 'm'] = 1; say(pre.concat([distKey(Math.max(0, q.manDist)), lightKey(m), actKey(m)])); }
+    else say(pre);
   }
   const offLimit = () => navRoute.mode === 'car' ? Math.max(45, Math.min(pos.acc || 0, 60) * 1.4) : Math.max(40, Math.min(pos.acc || 0, 60) * 1.4);
   // New route from where you are now, keeping the road preference and any detours already chosen
@@ -1108,23 +1238,24 @@
       </div>
       <p class="small" id="roMsg"></p>
       <h3 style="margin:14px 0 6px">Voice</h3>
-      <div class="seg">${[['auto', 'Automatic'], ['phone', 'Phone voice'], ['builtin', 'Built-in']].map(([k, l]) => `<button class="btn ${voiceEngine() === k ? 'pri' : ''}" data-ve="${k}">${l}</button>`).join('')}<button class="btn" id="veTest">🔊 Test</button></div>
-      <p class="small muted" style="margin:6px 0 0">Built-in voice is part of the app and always works with no signal. Automatic uses the iPhone's voice when it can and switches to the built-in one when you're offline.</p>
+      <div class="seg">${[['builtin', 'Built-in voice'], ['phone', 'iPhone voice']].map(([k, l]) => `<button class="btn ${voiceEngine() === k ? 'pri' : ''}" data-ve="${k}">${l}</button>`).join('')}<button class="btn" id="veTest">🔊 Test</button></div>
+      <p class="small muted" style="margin:6px 0 0">The built-in voice is recorded into the app and always works with no signal. The iPhone voice is used only when you have signal; otherwise the built-in one speaks.</p>
       <div class="box small muted" style="margin-top:8px">Missed a turn? You don't need to do anything — the route recalculates by itself a few seconds after you leave it.</div>
       <div class="btnrow"><button class="btn" id="roClose">Close</button></div>`);
     $('#roClose').onclick = closeSheet;
-    document.querySelectorAll('[data-ve]').forEach(b => b.onclick = () => { store.set('voiceEngine', b.dataset.ve); phoneVoiceOK = null; unlockAudio(); document.querySelectorAll('[data-ve]').forEach(x => x.classList.toggle('pri', x === b)); speak(b.dataset.ve === 'builtin' ? 'Built-in voice. In 500 feet, turn left onto Main Street' : 'In 500 feet, turn left onto Main Street', true); });
-    $('#veTest').onclick = () => { unlockAudio(); speak('In half a mile, at the traffic light, turn right onto Oak Street', true); };
+    document.querySelectorAll('[data-ve]').forEach(b => b.onclick = () => { store.set('voiceEngine', b.dataset.ve); phoneVoiceOK = null; unlockAudio(); document.querySelectorAll('[data-ve]').forEach(x => x.classList.toggle('pri', x === b)); say(['ft500', 'turn_left'], true); });
+    $('#veTest').onclick = () => { unlockAudio(); say(['mi0.5', 'at_light', 'turn_right'], true); };
     document.querySelectorAll('[data-ro]').forEach(a => a.onclick = e => {
       e.preventDefault(); const k = a.dataset.ro; if (routing) return;
       if (!pos) return toast('Waiting for a GPS fix');
       const before = p ? p.eta : navRoute.time; let opt = {}, label = '';
-      if (k === 'fast' || k === 'back') { if (k === cur) return closeSheet(); routePref = k; store.set('routePref', k); opt = { pref: k }; label = k === 'back' ? 'Taking back roads' : 'Taking the fastest route'; }
-      else if (k === 'avoid') { const av = routeAhead(150, aheadM); if (!av) return toast('Nothing ahead to avoid'); opt = { addAvoid: av }; label = 'Detouring around ' + spoken(road); }
-      else { opt = { avoid: null }; label = 'Detours cleared'; }
+      let lk = '';
+      if (k === 'fast' || k === 'back') { if (k === cur) return closeSheet(); routePref = k; store.set('routePref', k); opt = { pref: k }; label = k === 'back' ? 'Taking back roads' : 'Taking the fastest route'; lk = k === 'back' ? 'taking_back' : 'taking_fast'; }
+      else if (k === 'avoid') { const av = routeAhead(150, aheadM); if (!av) return toast('Nothing ahead to avoid'); opt = { addAvoid: av }; label = 'Detouring around ' + road; lk = 'detouring'; }
+      else { opt = { avoid: null }; label = 'Detours cleared'; lk = 'detours_cleared'; }
       $('#roMsg').innerHTML = '⏳ Working out a new route…';
       const diffOf = r => { const d = Math.round((r.time - before) / 60); return Math.abs(d) < 1 ? 'about the same time' : Math.abs(d) + (Math.abs(d) === 1 ? ' minute ' : ' minutes ') + (d > 0 ? 'longer' : 'faster'); };
-      reroute(opt, r => label + ', ' + diffOf(r)).then(r => {
+      reroute(opt, r => { const dm = Math.round((r.time - before) / 60); return [lk, k === 'clear' ? '' : Math.abs(dm) < 1 ? 'same' : dm > 0 ? 'longer' : 'faster']; }).then(r => {
         if (!r) return; closeSheet();
         toast((k === 'back' ? '🌾 ' : k === 'fast' ? '🛣️ ' : k === 'avoid' ? '🚧 ' : '↩️ ') + label + '. ' + fmtTime(r.time) + ', ' + diffOf(r) + '.');
       }).catch(err => { const m = $('#roMsg'); if (m) m.innerHTML = '⚠️ ' + esc(err.message); });
@@ -1143,7 +1274,7 @@
       ${navRoute.mode === 'car' ? `<div class="seg" style="margin:8px 0"><button class="btn ${(navRoute.pref || routePref) === 'fast' ? 'pri' : ''}" data-rp="fast">🛣️ Fastest</button><button class="btn ${(navRoute.pref || routePref) === 'back' ? 'pri' : ''}" data-rp="back">🌾 Back roads</button>${tbt ? '<button class="btn" id="rsOpts">🚧 Detour…</button>' : ''}</div>` : ''}
       <div id="rsProf" class="small muted">⛰️ Checking elevation…</div>
       <h3>Directions</h3>
-      <div class="list">${navRoute.mode === 'car' && navRoute.man ? navRoute.man.slice(0, -1).map((m, i) => `<div class="row"><span class="i tbt-li">${arrowSVG(m)}</span><span class="t"><b>${esc(m.text)}</b><small>then go ${Geo.fmtDist(navRoute.steps[i] ? navRoute.steps[i].dist : 0, u)}</small></span></div>`).join('') : navRoute.steps.map((s, i) => `<div class="row"><span class="i">${i === 0 ? '🚩' : '↪️'}</span><span class="t"><b>${esc(s.name)}</b><small>${kindName[['road', 'trail', 'forest', 'off'].indexOf(s.kind)]} · ${Geo.fmtDist(s.dist, u)}</small></span></div>`).join('')}<div class="row"><span class="i">🏁</span><span class="t"><b>${esc(target.name)}</b></span></div></div>
+      <div class="list">${navRoute.mode === 'car' && navRoute.man ? navRoute.man.slice(0, -1).map((m, i) => `<div class="row"><span class="i tbt-li">${arrowSVG(m)}</span><span class="t"><b>${esc(m.text)}</b><small>${m.light ? '🚦 at the light · ' : ''}then go ${Geo.fmtDist((navRoute.man[i + 1] ? navRoute.man[i + 1].d : m.d) - m.d, u)}</small></span></div>`).join('') : navRoute.steps.map((s, i) => `<div class="row"><span class="i">${i === 0 ? '🚩' : '↪️'}</span><span class="t"><b>${esc(s.name)}</b><small>${kindName[['road', 'trail', 'forest', 'off'].indexOf(s.kind)]} · ${Geo.fmtDist(s.dist, u)}</small></span></div>`).join('')}<div class="row"><span class="i">🏁</span><span class="t"><b>${esc(target.name)}</b></span></div></div>
       <div class="box warn small" style="margin-top:10px">Routes are calculated offline from public map data. Roads and trails can be closed, washed out, gated or on private land — use judgment and obey closures.</div>
       ${fresh && navRoute.mode === 'car' ? `<div class="btnrow"><button class="btn red" id="rsEnd">✕ End navigation</button></div>`
       : `<div class="btnrow"><button class="btn pri" id="rsGo">${fresh ? '▶ Start' : 'Close'}</button>${navRoute.mode === 'car' && !tbt ? '<button class="btn" id="rsTbt">🧭 Turn-by-turn</button>' : ''}<button class="btn red" id="rsEnd">✕ End navigation</button></div>`}`);
