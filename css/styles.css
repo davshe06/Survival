@@ -380,3 +380,4 @@ body.tbt-on .mcomp { top: auto; bottom: calc(150px + var(--safe-bottom)); }
 .seg .btn { flex: 1; min-width: 0; }
 .list .row.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .list.wrap .row small, .list.wrap .row b { white-space: normal; overflow: visible; text-overflow: clip; }
+.tbt-light { font-size: .95em; }
