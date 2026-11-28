@@ -121,7 +121,10 @@
     const startGPS = () => { if (gpsStop) gpsStop(); gpsStop = window.FG.watchGPS(onPos, onGpsErr); };
     if (!bgStop) startGPS(); else { gpsStop = bgStop; bgStop = null; }
     // iOS pauses location when the app is in the background; restart the GPS watch when it comes back.
-    const onVis = () => { if (document.visibilityState === 'visible') { firstFix = !pos; startGPS(); } };
+    const onVis = () => {
+      if (trackWanted) alog(document.hidden ? 'app went to background' + (trackEl && !trackEl.paused ? '' : ' (card audio NOT playing)') : 'back in app');
+      if (document.visibilityState === 'visible') { firstFix = !pos; startGPS(); if (trackWanted) playTrack('back in app'); }
+    };
     document.addEventListener('visibilitychange', onVis);
     const hudTimer = setInterval(() => { if (pos) updateHud(); }, 5000);
     // Live compass (iPhone magnetometer). Shown as the compass widget and as the direction cone on your dot.
@@ -827,42 +830,99 @@
   // ---------- voice: short pre-recorded phrases built into the app (no street names), so it works with no signal ----------
   // data/voice.mp3 holds every clip; data/voice.json says where each one is. A prompt is a few clips joined:
   // "In 500 feet," + "turn left."  /  "At the traffic light," + "turn left now."  /  "Turn left now." + "Then turn right."
-  let VOICE = null, VOICEBUF = null, voiceLoading = null, navAudio = null, silentURL = null, phoneVoiceOK = null;
+  let VOICE = null, VOICEBUF = null, voiceLoading = null, silentURL = null, phoneVoiceOK = null;
   const voiceEngine = () => store.get('voiceEngine', 'builtin') === 'phone' ? 'phone' : 'builtin';
   function loadVoice() {
     if (VOICE) return Promise.resolve(true);
     return voiceLoading || (voiceLoading = Promise.all([fetch('data/voice.json').then(r => r.json()), fetch('data/voice.mp3').then(r => r.arrayBuffer())])
-      .then(([j, b]) => { VOICE = j; VOICEBUF = b; return true; }).catch(() => { voiceLoading = null; return false; }));
+      .then(([j, b]) => {
+        VOICE = j; VOICEBUF = b;
+        // navigation already started with the plain quiet track: switch to the one that can also speak (only while the app is on screen)
+        if (trackWanted && trackEl && trackURL && !document.hidden && buildTrack() && trackURL !== TR.url) { trackURL = TR.url; trackEl.src = TR.url; playTrack('upgrade'); }
+        return true;
+      }).catch(() => { voiceLoading = null; return false; }));
   }
   function silentWav(sec) { const n = Math.round(8000 * sec) * 2, b = new ArrayBuffer(44 + n), v = new DataView(b), w = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0))); w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n, true); return URL.createObjectURL(new Blob([b], { type: 'audio/wav' })); }
-  // One audio player for everything: it plays a silent loop while navigating (keeps the app alive in the background and
-  // shows the nav card on the lock screen / Dynamic Island / Android notification) and the voice clips in between.
-  function navEl() {
-    if (!navAudio) {
-      navAudio = new Audio(); navAudio.setAttribute('playsinline', ''); navAudio.preload = 'auto';
-      navAudio.addEventListener('ended', () => { if (navAudio._voice) { navAudio._voice = false; keepAlive(); } });
+  // Two audio players. The "track" plays a quiet loop the whole time you navigate and is NEVER paused or swapped:
+  // that's what keeps the nav card on the lock screen / Dynamic Island / Android notification and keeps the app
+  // running with the screen off (iPhone won't let a page START audio while it's in the background, only keep it going).
+  // Voice prompts play on a second player alongside it.
+  let trackEl = null, voiceEl = null, trackURL = null, trackWanted = false;
+  const audioLog = store.get('navAudioLog', []);
+  function alog(msg) { // a short history of what the phone did with the audio, shown in Change route › Lock screen card
+    audioLog.push(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) + (document.hidden ? ' [bg] ' : ' ') + msg);
+    while (audioLog.length > 40) audioLog.shift(); store.set('navAudioLog', audioLog);
+  }
+  // The track is built in memory from the voice clips: [10 min of quiet][clip][gap][clip][gap]…  Every MP3 frame is
+  // 108 bytes = 36 ms, so a clip's position in seconds is exact (bytes ÷ 3000). To speak, we jump the playhead to the
+  // clips and back to the quiet part — jumping isn't "starting" audio, so it's allowed with the screen locked.
+  let TR = null, speakQ = null, tickT = 0;
+  const BPS = 3000; // bytes per second at 24 kbps
+  function buildTrack() {
+    if (TR || !VOICE || !VOICE.silence) return TR;
+    const [s0, s1] = VOICE.silence, sil = VOICEBUF.slice(s0, s1), gap = VOICEBUF.slice(s0, s0 + 22 * 108), parts = [], map = {}; let off = 0;
+    for (let i = 0; i < 60; i++) { parts.push(sil); off += sil.byteLength; }
+    const idleEnd = off / BPS;
+    for (const k in VOICE) { if (k === 'silence') continue; const c = VOICEBUF.slice(VOICE[k][0], VOICE[k][1]); map[k] = [off / BPS, (off + c.byteLength) / BPS]; parts.push(c, gap); off += c.byteLength + gap.byteLength; }
+    TR = { url: URL.createObjectURL(new Blob(parts, { type: 'audio/mpeg' })), map, idleEnd };
+    return TR;
+  }
+  function trackSrc() {
+    if (trackURL) return trackURL;
+    trackURL = buildTrack() ? TR.url : silentWav(10);
+    return trackURL;
+  }
+  const trackCanSpeak = () => TR && trackEl && trackURL === TR.url && !trackEl.paused && trackEl.readyState >= 2;
+  function trackSay(keys) {
+    const segs = keys.map(k => TR.map[k]).filter(Boolean); if (!segs.length) return;
+    speakQ = { segs, i: 0 }; trackEl.currentTime = segs[0][0]; tick();
+  }
+  function tick() { // move from clip to clip, then back to the quiet part
+    clearTimeout(tickT); const a = trackEl; if (!a) return;
+    if (!speakQ) { if (a.currentTime > 20 && a.currentTime < TR.idleEnd + 1) a.currentTime = 1; return; }
+    const seg = speakQ.segs[speakQ.i], t = a.currentTime;
+    if (t >= seg[1] - 0.03 || t < seg[0] - 0.5) {
+      if (t < seg[0] - 0.5 && !a.seeking) { a.currentTime = seg[0]; }
+      else if (++speakQ.i < speakQ.segs.length) a.currentTime = speakQ.segs[speakQ.i][0];
+      else { speakQ = null; a.currentTime = 1; return; }
     }
-    return navAudio;
+    const left = speakQ.segs[speakQ.i][1] - Math.max(a.currentTime, speakQ.segs[speakQ.i][0]);
+    tickT = setTimeout(tick, Math.max(15, Math.min(250, left * 1000 - 20)));
   }
-  function keepAlive() {
-    const a = navEl(); if (!tbt || a._voice) return;
-    if (!silentURL) silentURL = silentWav(3);
-    if (a.src !== silentURL) { a.loop = true; a.src = silentURL; }
-    const pr = a.play(); if (pr) pr.catch(() => { });
+  function trackPlayer() {
+    if (!trackEl) {
+      trackEl = new Audio(); trackEl.setAttribute('playsinline', ''); trackEl.preload = 'auto';
+      trackEl.addEventListener('timeupdate', () => { if (TR && trackURL === TR.url) tick(); });
+      trackEl.addEventListener('ended', () => alog('card audio ended'));
+      trackEl.addEventListener('playing', () => { if (!trackEl._on) alog('card audio playing'); trackEl._on = true; });
+      trackEl.addEventListener('pause', () => { trackEl._on = false; alog('card audio paused'); if (trackWanted && !document.hidden) setTimeout(() => playTrack('resume'), 300); });
+      trackEl.addEventListener('error', () => alog('card audio error ' + (trackEl.error && trackEl.error.code)));
+    }
+    return trackEl;
   }
+  function playTrack(why) {
+    const a = trackPlayer(); if (!a.paused && a.src) return;
+    if (!a.src) a.src = trackSrc();
+    const pr = a.play(); if (pr) pr.then(() => updateWidget(true)).catch(e => alog('card audio blocked (' + why + '): ' + (e && e.name)));
+  }
+  function voicePlayer() { if (!voiceEl) { voiceEl = new Audio(); voiceEl.setAttribute('playsinline', ''); voiceEl.preload = 'auto'; } return voiceEl; }
   // iPhone only lets a page start sound after a tap: call this from a tap so later prompts can play by themselves
   function unlockAudio() {
     try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { } // play even with the ring/silent switch on silent
-    const a = navEl(); if (!silentURL) silentURL = silentWav(3);
-    if (!a._voice) { a.loop = true; a.src = silentURL; const pr = a.play(); if (pr) pr.catch(() => { }); if (!tbt) setTimeout(() => { if (!tbt && !a._voice) a.pause(); }, 400); }
+    const v = voicePlayer(); if (!silentURL) silentURL = silentWav(0.3);
+    if (v.paused) { v.src = silentURL; const pr = v.play(); if (pr) pr.catch(() => { }); }
     loadVoice(); try { speechSynthesis.getVoices(); } catch (e) { }
   }
+  function startTrack() { trackWanted = true; alog('navigation started' + ('mediaSession' in navigator ? '' : ' (no lock-screen support in this browser)')); playTrack('start'); }
+  function stopTrack() { trackWanted = false; speakQ = null; if (trackEl) { trackEl.pause(); } }
   function playClips(keys) {
     if (!VOICE) { loadVoice().then(ok => { if (ok) playClips(keys); }); return; }
+    if (trackCanSpeak()) return trackSay(keys); // through the always-playing nav track (works with the screen locked)
     const parts = keys.filter(k => VOICE[k]).map(k => VOICEBUF.slice(VOICE[k][0], VOICE[k][1])); if (!parts.length) return;
-    const a = navEl(); if (a._url) URL.revokeObjectURL(a._url);
-    a._url = URL.createObjectURL(new Blob(parts, { type: 'audio/mpeg' })); a._voice = true; a.loop = false; a.src = a._url;
-    const pr = a.play(); if (pr) pr.catch(() => { a._voice = false; });
+    const a = voicePlayer(); if (a._url) URL.revokeObjectURL(a._url);
+    a._url = URL.createObjectURL(new Blob(parts, { type: 'audio/mpeg' })); a.src = a._url;
+    const pr = a.play(); if (pr) pr.catch(e => alog('voice blocked: ' + (e && e.name)));
+    if (trackWanted && trackEl && trackEl.paused && !document.hidden) playTrack('voice');
   }
   const clipText = k => VOICE && VOICE[k] ? VOICE[k][2] : '';
   function phoneVoice() {
@@ -870,7 +930,7 @@
     const local = vs.filter(v => v.localService !== false), pick = n => local.find(v => v.name.indexOf(n) >= 0);
     return pick('Samantha') || pick('Alex') || pick('Ava') || local.find(v => v.default) || local[0] || null;
   }
-  function stopSpeech() { try { speechSynthesis.cancel(); } catch (e) { } if (navAudio && navAudio._voice) { navAudio._voice = false; navAudio.pause(); keepAlive(); } }
+  function stopSpeech() { try { speechSynthesis.cancel(); } catch (e) { } if (voiceEl && !voiceEl.paused) voiceEl.pause(); if (speakQ && trackEl) { speakQ = null; trackEl.currentTime = 1; } }
   // say(['ft500', 'turn_left']) → "In 500 feet, turn left."
   function say(keys, force) {
     if (!voiceOn && !force) return; keys = keys.filter(Boolean); if (!keys.length) return; lastSpeak = Date.now();
@@ -959,7 +1019,7 @@
   function setupMediaSession() {
     if (!('mediaSession' in navigator)) return;
     const h = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch (e) { } };
-    h('play', () => keepAlive()); h('pause', () => { voiceOn = !voiceOn; store.set('tbtVoice', voiceOn); toast(voiceOn ? '🔊 Voice on' : '🔇 Voice muted'); keepAlive(); updateHud(); });
+    h('play', () => playTrack('lock screen play')); h('pause', () => { voiceOn = !voiceOn; store.set('tbtVoice', voiceOn); toast(voiceOn ? '🔊 Voice on' : '🔇 Voice muted'); playTrack('lock screen pause'); updateHud(); });
     h('stop', null); h('seekbackward', null); h('seekforward', null); h('previoustrack', null); h('nexttrack', null);
     h('enterpictureinpicture', () => startPip()); // Chrome/Android: float the mini window automatically when you leave the app
   }
@@ -982,7 +1042,7 @@
   function stopWidget() {
     try { if (document.pictureInPictureElement) document.exitPictureInPicture(); } catch (e) { }
     if (pipVideo) { try { pipVideo.pause(); pipVideo.srcObject = null; pipVideo.remove(); } catch (e) { } pipVideo = null; }
-    if (navAudio) { navAudio._voice = false; navAudio.pause(); }
+    stopTrack(); if (voiceEl) voiceEl.pause();
     if ('mediaSession' in navigator) { try { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = 'none'; } catch (e) { } }
     wMetaKey = '';
   }
@@ -992,7 +1052,7 @@
     setRotMode(store.get('navNorthUp', false) ? 'north' : 'heading'); // map turns with the road, like a car GPS
     if (pos) { S.lat = pos.lat; S.lon = pos.lon; } S.z = 16;
     if (navigator.wakeLock) navigator.wakeLock.request('screen').then(w => tbtWake = w).catch(() => { });
-    unlockAudio(); setupMediaSession(); setTimeout(keepAlive, 450);
+    unlockAudio(); setupMediaSession(); startTrack();
     const p = routeProgress(), m0 = navRoute.man && navRoute.man[0], first = p && p.man && p.man.type !== 'start' ? p.man : null;
     if (first) { const k = first.at + ':' + first.type; said[k + 'f'] = 1; if (p.manDist < 200) said[k + 'm'] = 1; }
     say(['start', m0 && /^Drive to the road/.test(m0.text) ? 'to_road' : '', first ? distKey(Math.max(0, p.manDist)) : '', first ? lightKey(first) : '', first ? actKey(first) : '']);
@@ -1023,7 +1083,7 @@
     $('#tbtVoice').onclick = () => { voiceOn = !voiceOn; store.set('tbtVoice', voiceOn); unlockAudio(); if (!voiceOn) stopSpeech(); else say(['voice_on'], true); updateHud(); };
     $('#tbtList').onclick = () => showRouteSummary(false);
     $('#tbtRoute').onclick = showRouteOptions;
-    const pb = $('#tbtPip'); if (pb) pb.onclick = () => { unlockAudio(); keepAlive(); startPip(); };
+    const pb = $('#tbtPip'); if (pb) pb.onclick = () => { unlockAudio(); playTrack('mini window'); startPip(); };
     updateWidget();
     $('#tbtEnd').onclick = () => endNav();
     if (pos && follow) { S.z = v > 24 ? 14.6 : v > 13 ? 15.4 : 16.3; }
@@ -1106,7 +1166,7 @@
   }
 
   navRoute = prepRoute(navRoute);
-  window.FG._nav = () => navRoute; window.FG._pip = () => [pipCanvas && pipCanvas.toDataURL(), artCanvas && artCanvas.toDataURL()]; // for testing
+  window.FG._nav = () => navRoute; window.FG._track = () => ({ playing: !!(trackEl && !trackEl.paused), t: trackEl ? trackEl.currentTime : null, built: !!TR, speaking: !!speakQ, url: trackURL && TR && trackURL === TR.url }); window.FG._pip = () => [pipCanvas && pipCanvas.toDataURL(), artCanvas && artCanvas.toDataURL()]; // for testing
   function fmtTime(s) { s = Math.round(s / 60); return s < 60 ? s + ' min' : Math.floor(s / 60) + ' h ' + (s % 60) + ' min'; }
   function statesFor(a, b) {
     if (!SEIDX) return [];
@@ -1240,9 +1300,15 @@
       <h3 style="margin:14px 0 6px">Voice</h3>
       <div class="seg">${[['builtin', 'Built-in voice'], ['phone', 'iPhone voice']].map(([k, l]) => `<button class="btn ${voiceEngine() === k ? 'pri' : ''}" data-ve="${k}">${l}</button>`).join('')}<button class="btn" id="veTest">🔊 Test</button></div>
       <p class="small muted" style="margin:6px 0 0">The built-in voice is recorded into the app and always works with no signal. The iPhone voice is used only when you have signal; otherwise the built-in one speaks.</p>
+      <h3 style="margin:14px 0 6px">Lock screen &amp; Dynamic Island</h3>
+      <p class="small" id="lsStatus">${'mediaSession' in navigator ? (trackEl && !trackEl.paused ? '✅ Nav card is active — lock the phone or swipe home to see it.' : '⚠️ Nav card audio isn’t playing. Tap “Restart card”.') : '⚠️ This browser doesn’t support lock-screen cards.'}</p>
+      <div class="btnrow"><button class="btn" id="lsRestart">↻ Restart card</button><button class="btn" id="lsLog">Show details</button></div>
+      <pre class="small mono" id="lsLogBox" hidden style="white-space:pre-wrap;max-height:180px;overflow:auto"></pre>
       <div class="box small muted" style="margin-top:8px">Missed a turn? You don't need to do anything — the route recalculates by itself a few seconds after you leave it.</div>
       <div class="btnrow"><button class="btn" id="roClose">Close</button></div>`);
     $('#roClose').onclick = closeSheet;
+    $('#lsRestart').onclick = () => { unlockAudio(); trackWanted = true; if (trackEl) { trackEl.pause(); } playTrack('restart tap'); setupMediaSession(); setTimeout(() => { const st = $('#lsStatus'); if (st) st.textContent = trackEl && !trackEl.paused ? '✅ Nav card is active — lock the phone or swipe home to see it.' : '⚠️ Still not playing — see details.'; }, 700); };
+    $('#lsLog').onclick = () => { const b = $('#lsLogBox'); b.hidden = !b.hidden; b.textContent = audioLog.slice(-25).join('\n') || '(nothing yet)'; };
     document.querySelectorAll('[data-ve]').forEach(b => b.onclick = () => { store.set('voiceEngine', b.dataset.ve); phoneVoiceOK = null; unlockAudio(); document.querySelectorAll('[data-ve]').forEach(x => x.classList.toggle('pri', x === b)); say(['ft500', 'turn_left'], true); });
     $('#veTest').onclick = () => { unlockAudio(); say(['mi0.5', 'at_light', 'turn_right'], true); };
     document.querySelectorAll('[data-ro]').forEach(a => a.onclick = e => {
@@ -1263,6 +1329,7 @@
   }
   function showRouteSummary(fresh) {
     if (!navRoute || !target) return;
+    if (navRoute.mode === 'car') loadVoice();
     const u = window.FG.units(), p = routeProgress();
     const kindName = ['🛣️ road', '🥾 trail', '🌲 forest road', '🧭 cross‑country'];
     const parts = navRoute.byKind ? [['road', 0], ['trail', 1], ['forest', 2], ['off', 3]].filter(([k]) => navRoute.byKind[k] > 20).map(([k, i]) => kindName[i] + ' ' + Geo.fmtDist(navRoute.byKind[k], u)).join(' · ') : '';

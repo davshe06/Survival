@@ -42,6 +42,9 @@ def enc(pcm):
     y = np.interp(np.arange(n) * SR / OUT_SR, np.arange(len(x)), x).astype(np.int16)  # 22.05 -> 16 kHz (speech band is below 8 kHz)
     e = lameenc.Encoder(); e.set_bit_rate(24); e.set_in_sample_rate(OUT_SR); e.set_channels(1); e.set_quality(2)
     return e.encode(y.tobytes()) + e.flush()
+# 10 s of near-silence (tiny dither, inaudible) for the lock-screen / Dynamic Island keep-alive track
+import random; random.seed(1)
+data = enc(np.array([random.randint(-2, 2) for _ in range(SR * 10)], np.int16).tobytes()); idx['silence'] = [len(mp3), len(mp3) + len(data), '']; mp3 += data
 for k, t in P.items():
     b = io.BytesIO()
     with wave.open(b, 'wb') as w: v.synthesize_wav(t, w, syn_config=cfg)
