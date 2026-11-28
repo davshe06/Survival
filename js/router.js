@@ -242,6 +242,22 @@ async function findRoute({ mode, from, to, states, pref, avoid, hdg }) {
     pathE.push(e); cur = eA[e] === cur ? eB[e] : eA[e]; pathN.push(cur);
   }
   pathN.reverse(); pathE.reverse();
+  // intersections along the route (3+ roads meet), and forks where another road leaves close to our direction.
+  // The app turns these into "turn left", "keep right", etc. — so small turns aren't missed when the road name doesn't change.
+  const jx = [];
+  const brg = (a, b) => Math.atan2((nx[b] - nx[a]) * LATK, (ny[b] - ny[a]) * metresPerUnitY) / D2R;
+  const ang = (a, b) => ((a - b) % 360 + 540) % 360 - 180;
+  for (let i = 1; i < pathN.length - 1; i++) {
+    const u = pathN[i], pv = pathN[i - 1], nxN = pathN[i + 1]; if (u >= S) continue;
+    const nb = new Set(); for (let p = cnt[u]; p < cnt[u + 1]; p++) { const v = adjTo[p]; if (v !== u && v < S) nb.add(v); }
+    if (nb.size < 3) continue;
+    const bo = brg(u, nxN), bi = brg(pv, u); let fork = 0, best = 99;
+    for (const w of nb) {
+      if (w === pv || w === nxN) continue; const bw = brg(u, w);
+      if (Math.abs(ang(bw, bi)) < 80 && Math.abs(ang(bo, bw)) < 50 && Math.abs(ang(bo, bw)) < best) { best = Math.abs(ang(bo, bw)); fork = ang(bo, bw) > 0 ? 2 : 1; } // 1 = keep left, 2 = keep right
+    }
+    jx.push(i, fork);
+  }
   const coords = [], kinds = []; let total = 0, time = 0; const byKind = { road: 0, trail: 0, forest: 0, off: 0 };
   const steps = [];
   for (let i = 0; i < pathN.length; i++) {
@@ -264,5 +280,5 @@ async function findRoute({ mode, from, to, states, pref, avoid, hdg }) {
     if (last && last.kind !== 'off' && last.dist < 120 && st.kind === last.kind && tidy.length > 1) { const prev = tidy[tidy.length - 2]; if (prev.kind !== 'off') { prev.dist += last.dist; tidy.pop(); } }
     tidy.push(Object.assign({}, st));
   }
-  return { coords, kinds, total, time, byKind, pref: pref || 'fast', avoided: avoided.size, steps: tidy.filter(s => s.dist > 10), straight, haveLocal, nodes: N, visited, lines };
+  return { coords, kinds, total, time, byKind, jx, pref: pref || 'fast', avoided: avoided.size, steps: tidy.filter(s => s.dist > 10), straight, haveLocal, nodes: N, visited, lines };
 }
