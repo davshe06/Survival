@@ -39,7 +39,7 @@ async function loadState(code) {
 // ---------- costs ----------
 function speedKmh(mode, f) {
   if (mode === 'car') {
-    if (f.layer === 'major') return f.k === 1 ? (/^I-/.test(f.n) ? 105 : 80) : f.k === 3 ? 50 : 65;
+    if (f.layer === 'major') return f.k === 1 ? (/^(I-|Hwy-)/.test(f.n) ? 105 : 80) : f.k === 3 ? 50 : 65; // Hwy- = Canadian motorway
     if (f.layer === 'local') return f.k === 1 ? 40 : 25;
     if (f.layer === 'fs') return f.k === 1 ? 30 : 0;   // forest service roads yes, 4WD tracks no
     return 0;                                           // no trails
@@ -53,7 +53,7 @@ function speedKmh(mode, f) {
 function prefFactor(pref, f) {
   if (pref !== 'back' || f.layer !== 'major') return 1;
   if (f.k === 3) return 3;                    // ramps (only interstates/freeways have them)
-  if (f.k === 1) return /^I-/.test(f.n) ? 4 : 1.8;
+  if (f.k === 1) return /^(I-|Hwy-)/.test(f.n) ? 4 : 1.8;
   return 1;
 }
 const OFFROAD_KMH = 2;   // walking cross-country to reach the nearest road/trail
@@ -93,8 +93,9 @@ async function findRoute({ mode, from, to, states, pref, avoid, hdg }) {
   const attrs = []; // [layer, name]
   const node = (x, y) => { const key = (x + 2e7) * 1e7 + y; let id = idOf.get(key); if (id === undefined) { id = nx.length; idOf.set(key, id); nx.push(x); ny.push(y); } return id; };
   let haveLocal = true, lines = 0; const lineEnds = [];
+  let loaded = 0, missing = [];
   for (const code of states) {
-    const s = await loadState(code);
+    let s; try { s = await loadState(code); loaded++; } catch (e) { missing.push(code); continue; } // e.g. a Canadian province that isn't downloaded
     if (!s.local) haveLocal = false;
     const layers = [s.major, s.fs, mode === 'foot' ? s.trails : [], s.local || []];
     for (const list of layers) for (const f of list) {
@@ -111,6 +112,7 @@ async function findRoute({ mode, from, to, states, pref, avoid, hdg }) {
       }
     }
   }
+  if (!loaded) throw new Error('Map data for ' + missing.join(', ') + ' is not available offline — download it in Layers 🗂️');
   if (!nx.length) throw new Error(mode === 'car' ? 'No roads found in this area' : 'No roads or trails found in this area');
   const N = nx.length, avoided = new Set();
   // detour: stay off a stretch of road (traffic, accident, closure). avoid = flat [x, y, ...] in 1e-5 degrees

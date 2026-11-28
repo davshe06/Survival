@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const dir = process.argv[2];
 const topojson = require(path.resolve(dir, 'topojson-client-3.1.0/package/dist/topojson-client.min.js'));
-const BB = { w: -95.2, e: -66.5, s: 23.8, n: 47.8 };
+const BB = { w: -95.2, e: -52.3, s: 23.8, n: 62.9 }; // south-east US + north-east US + eastern Canada (ON, QC, NB, NS, PE, NL)
 const SE_FIPS = { '01': 'AL', '05': 'AR', '12': 'FL', '13': 'GA', '21': 'KY', '22': 'LA', '28': 'MS', '37': 'NC', '45': 'SC', '47': 'TN', '51': 'VA', '54': 'WV', '42': 'PA', '34': 'NJ', '36': 'NY', '09': 'CT', '44': 'RI', '25': 'MA', '50': 'VT', '33': 'NH', '23': 'ME', '24': 'MD', '10': 'DE', '11': 'DC' };
 const load = f => JSON.parse(fs.readFileSync(path.join(dir, f)));
 
@@ -80,7 +80,9 @@ const data = { bbox: BB, built: new Date().toISOString().slice(0, 10) };
 // US states plus neighbouring Canadian provinces (so border crossings have context)
 const st = load('ne_10m_admin_1_states_provinces.geojson').features.filter(f => f.properties.adm0_a3 === 'USA' || f.properties.adm0_a3 === 'CAN');
 data.states = polyLayer(st, 0.004, f => f.properties.postal);
-data.stateLabels = st.filter(f => Object.values(SE_FIPS).includes(f.properties.postal) || (f.properties.adm0_a3 === 'CAN' && ['ON', 'QC', 'NB'].includes(f.properties.postal)))  .map(f => { const ca = { ON: [-77.6, 44.75], QC: [-71.9, 46.3], NB: [-66.9, 46.85] }[f.properties.adm0_a3 === 'CAN' && f.properties.postal];
+const CA_LABEL = { ON: [-84.8, 50.2], QC: [-72.3, 51.2], NB: [-66.4, 46.65], NS: [-63.6, 45.1], PE: [-63.25, 46.38], NL: [-61.5, 53.6] };
+data.stateLabels = st.filter(f => Object.values(SE_FIPS).includes(f.properties.postal) || (f.properties.adm0_a3 === 'CAN' && CA_LABEL[f.properties.postal])).map(f => {
+    const ca = f.properties.adm0_a3 === 'CAN' && CA_LABEL[f.properties.postal];
     return { n: f.properties.name + (ca ? ' (Canada)' : ''), a: f.properties.postal, x: ca ? ca[0] : +f.properties.longitude.toFixed(3), y: ca ? ca[1] : +f.properties.latitude.toFixed(3) }; });
 
 // Counties from us-atlas topojson

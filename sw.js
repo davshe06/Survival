@@ -1,5 +1,5 @@
 /* Service worker: caches the whole app for offline use, and caches map tiles as they are viewed/downloaded. */
-const VERSION = '2026.11.27-2';
+const VERSION = '2026.11.28-2';
 const APP_CACHE = 'fg-app-' + VERSION;
 const TILE_CACHE = 'fg-tiles-v1';
 const ASSETS = [
@@ -47,7 +47,8 @@ self.addEventListener('fetch', e => {
   // App files: cache-first (works offline), refresh in background when online
   e.respondWith((async () => {
     const c = await caches.open(APP_CACHE);
-    const hit = await c.match(req, { ignoreSearch: true }) || (req.mode === 'navigate' ? await c.match('index.html') : null);
+    const hit = await c.match(req, { ignoreSearch: true }) || (req.mode === 'navigate' ? await c.match('index.html') : null)
+      || (url.pathname.includes('/data/se/') ? await (await caches.open('fg-packs-v1')).match(req, { ignoreSearch: true }) : null); // downloaded Canadian provinces
     const net = fetch(req).then(r => { if (r.ok && (url.pathname.includes('/img/photos/') || ASSETS.some(a => url.pathname.endsWith(a.replace('./', '/'))))) c.put(req, r.clone()); return r; }).catch(() => null);
     if (hit) { e.waitUntil(net); return hit; }
     const r = await net; return r || new Response('Offline', { status: 503 });

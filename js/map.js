@@ -494,7 +494,7 @@
         loadJSON('data/se/' + s.code + '.json').then(d => {
           SEDATA[s.code] = { major: gridIndex(decLines(d.major, 1e5)), fs: gridIndex(decLines(d.fs, 1e5)), trails: gridIndex(decLines(d.trails, 1e5)), sig: decSignals(d.sig) }; dirty = true;
           if (navRoute) markLights(navRoute);
-        }).catch(() => loadingSet.delete(s.code));
+        }).catch(() => setTimeout(() => loadingSet.delete(s.code), 30000)); // not available (offline and not downloaded): try again later
       }
       if (LAYERS.roads && S.z >= 11 && LOCALHAVE[s.code] && !LOCAL[s.code] && !loadingSet.has('L' + s.code)) {
         loadingSet.add('L' + s.code);
@@ -509,10 +509,19 @@
     }
   }
   const packURL = code => new URL('data/packs/local-' + code + '.json', location.href).href;
+  // Canadian provinces are big, so their highways/forest roads/trails file is part of the province download instead of built in
+  const CA_PROV = new Set(['ON', 'QC', 'NB', 'NS', 'PE', 'NL']);
+  const seURL = code => new URL('data/se/' + code + '.json', location.href).href;
   async function refreshLocalHave() {
     if (!('caches' in window) || !SEIDX) return;
     try { const c = await caches.open(PACK_CACHE); for (const s of SEIDX.states) LOCALHAVE[s.code] = !!(await c.match(packURL(s.code))); } catch (e) { }
     dirty = true;
+  }
+  function inStateArea(code, p) { // point-in-polygon against the base map's state/province outline
+    if (!MD) return false; const f = MD.states.find(x => x.n === code); if (!f) return false;
+    const X = mx(p.lon), Y = my(p.lat); let inside = false;
+    for (const r of f.r) for (let i = 0, j = r.length - 2; i < r.length; j = i, i += 2) { const xi = r[i], yi = r[i + 1], xj = r[j], yj = r[j + 1]; if ((yi > Y) !== (yj > Y) && X < (xj - xi) * (Y - yi) / (yj - yi) + xi) inside = !inside; }
+    return inside;
   }
   function strokeLines(ix, vb, filter, style) {
     ctx.beginPath(); let any = false;
@@ -1036,7 +1045,7 @@
     return r;
   }
   // ---------- turn-by-turn maneuvers from the route geometry ----------
-  const isHwy = n => /^(I-|US-|SR-|Ramp)/.test(n || '');
+  const isHwy = n => /^(I-|US-|SR-|Hwy-|Rte-|Ramp)/.test(n || ''); // Hwy-/Rte- = Canadian highways and routes
   function ptAt(r, d) { // point on the route at distance d along it
     const c = r.cum, n = c.length; d = Math.max(0, Math.min(c[n - 1], d));
     let lo = 0, hi = n - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (c[m] <= d) lo = m; else hi = m; }
@@ -1078,7 +1087,7 @@
       const a = turnAt(d0, 22), abs = Math.abs(a), sideA = a < 0 ? 'left' : 'right', forkSide = c.fork === 1 ? 'left' : c.fork === 2 ? 'right' : '';
       let m = null;
       if (curN === 'Ramp' && prevN !== 'Ramp') { // leaving onto a ramp
-        const side = forkSide || (abs >= 8 ? sideA : ''), nxt = st[st.indexOf(cur) + 1], to = nxt && road(nxt.name), exit = isHwy(prevN) && !/^SR-/.test(prevN) || /^I-/.test(prevN);
+        const side = forkSide || (abs >= 8 ? sideA : ''), nxt = st.slice(st.indexOf(cur) + 1).find(x => x.kind !== 'off' && x.name !== 'Ramp'), to = nxt && road(nxt.name), exit = isHwy(prevN) && !/^(SR-|Rte-)/.test(prevN) || /^(I-|Hwy-)/.test(prevN);
         m = { type: 'ramp', exit, angle: side === 'left' ? -30 : side === 'right' ? 30 : 0, side, text: (exit ? 'Take the exit' : 'Take the ramp') + (side ? ' on the ' + side : '') + (to ? ' toward ' + to : '') };
       } else if (prevN === 'Ramp' && curN !== 'Ramp' && isHwy(curN) && abs < 45) {
         m = { type: 'merge', angle: a, side: '', text: 'Merge onto ' + (nm || 'the highway') };
@@ -1111,7 +1120,9 @@
   function statesFor(a, b) {
     if (!SEIDX) return [];
     const pad = 0.15, w = [Math.min(a.lon, b.lon) - pad, Math.min(a.lat, b.lat) - pad, Math.max(a.lon, b.lon) + pad, Math.max(a.lat, b.lat) + pad];
-    return SEIDX.states.filter(s => !(s.bbox[2] < w[0] || s.bbox[0] > w[2] || s.bbox[3] < w[1] || s.bbox[1] > w[3])).map(s => s.code);
+    return SEIDX.states.filter(s => !(s.bbox[2] < w[0] || s.bbox[0] > w[2] || s.bbox[3] < w[1] || s.bbox[1] > w[3]))
+      // a province only when it's downloaded, or the trip starts/ends in it (its bounding box overlaps lots of U.S. states)
+      .filter(s => !CA_PROV.has(s.code) || LOCALHAVE[s.code] || inStateArea(s.code, a) || inStateArea(s.code, b)).map(s => s.code);
   }
   let routePref = store.get('routePref', 'fast'); // 'fast' = highways allowed, 'back' = back roads
   function computeRoute(mode, from, dest, opt = {}) {
@@ -1648,14 +1659,15 @@
   function showLayers() {
     const saved = store.get('savedAreas', []);
     openSheet(`<h3 style="margin:0 0 6px">Map layers</h3>
-      <p class="small muted">The built‑in map of the eastern U.S. from Maine to the Gulf, plus border crossings into Canada (states, counties, cities, highways, rivers, lakes, parks) is always available offline. Detailed topo maps can be added for areas you choose while you have internet.</p>
+      <p class="small muted">The built‑in map of the eastern U.S. from Maine to the Gulf and eastern Canada (Ontario to Newfoundland & Labrador), with border crossings (states, counties, cities, highways, rivers, lakes, parks) is always available offline. Detailed topo maps can be added for areas you choose while you have internet.</p>
       <label class="f">Detailed background (needs saved tiles or internet)</label>
       <select class="inp" id="lyr"><option value="">None — built‑in offline map only</option>${Object.entries(TILE_SOURCES).filter(([, v]) => !v.overlay).map(([k, v]) => `<option value="${k}" ${tilesOn === k ? 'selected' : ''}>${v.name}</option>`).join('')}</select>
       <label class="chk" style="padding-left:0"><input type="checkbox" id="grd" ${store.get('mapgrid', false) ? 'checked' : ''}><span class="t"><b>Lat/long grid</b></span></label>
       <h3>Local roads & street addresses (offline, by state)</h3>
       <p class="small muted">Highways, state & county roads, forest service roads and hiking trails are built in. Every residential and back road, and the street addresses you can search for (🔍), are separate downloads per state. Get both for the states you drive in.</p>
-      <div class="list" id="packList">${(SEIDX ? SEIDX.states : []).map(st => { const A = ADDRIDX && ADDRIDX[st.code]; return `<div class="row" style="flex-wrap:wrap"><span class="t"><b>${esc(st.name)}</b><small>🛣️ local roads ${(st.local / 1e6).toFixed(0)} MB ${LOCALHAVE[st.code] ? '✅' : ''}${A ? ` · 🏠 ${A.n.toLocaleString()} addresses ${(A.size / 1e6).toFixed(0)} MB ${ADDRHAVE[st.code] ? '✅' : ''}` : ' · 🏠 no address data for this state'}</small></span>
-        ${LOCALHAVE[st.code] ? `<button class="btn" data-pdel="${st.code}">Delete roads</button>` : `<button class="btn pri" data-pget="${st.code}">Roads</button>`}${A ? (ADDRHAVE[st.code] ? `<button class="btn" data-adel="${st.code}">Delete addresses</button>` : `<button class="btn pri" data-aget="${st.code}">Addresses</button>`) : ''}</div>`; }).join('') || '<p class="muted small">Loading state list…</p>'}</div>
+      ${(() => { const row = st => { const A = ADDRIDX && ADDRIDX[st.code]; return `<div class="row" style="flex-wrap:wrap"><span class="t"><b>${esc(st.name)}</b><small>🛣️ ${CA_PROV.has(st.code) ? 'roads, forest roads & trails' : 'local roads'} ${((st.local + (CA_PROV.has(st.code) ? st.base : 0)) / 1e6).toFixed(0)} MB ${LOCALHAVE[st.code] ? '✅' : ''}${A ? ` · 🏠 ${A.n.toLocaleString()} addresses ${(A.size / 1e6).toFixed(0)} MB ${ADDRHAVE[st.code] ? '✅' : ''}` : ' · 🏠 no address data for this state'}</small></span>
+        ${LOCALHAVE[st.code] ? `<button class="btn" data-pdel="${st.code}">Delete roads</button>` : `<button class="btn pri" data-pget="${st.code}">Roads</button>`}${A ? (ADDRHAVE[st.code] ? `<button class="btn" data-adel="${st.code}">Delete addresses</button>` : `<button class="btn pri" data-aget="${st.code}">Addresses</button>`) : ''}</div>`; }, all = SEIDX ? SEIDX.states : [], us = all.filter(s => !CA_PROV.has(s.code)), ca = all.filter(s => CA_PROV.has(s.code));
+        return `<div class="list" id="packList">${us.map(row).join('') || '<p class="muted small">Loading state list…</p>'}</div>` + (ca.length ? `<h3>Canada</h3><p class="small muted">Province outlines, cities and main highways are built in. Download a province for its highways, forest/logging roads, trails, every local road and turn-by-turn routing offline (plus addresses to search).</p><div class="list">${ca.map(row).join('')}</div>` : ''); })()}
       <p class="small" id="packProg"></p>
       <h3>Save topo maps & terrain for offline use</h3>
       <ol class="small"><li>While online, pan/zoom so the area you need fills the screen.</li><li>Choose how much detail and tap Download.</li><li>Repeat for each area (home, bug‑out route, destination).</li></ol>
@@ -1665,7 +1677,7 @@
       <div class="btnrow"><button class="btn pri" id="dlGo">Download this area</button><button class="btn" id="dlClear">Delete saved tiles</button></div>
       <p class="small" id="dlProg"></p>
       ${saved.length ? `<h3>Saved areas</h3><div class="list">${saved.map((a, i) => `<a class="row" href="#" data-sa="${i}"><span class="t"><b>${esc(TILE_SOURCES[a.src] ? TILE_SOURCES[a.src].name : a.src)}</b><small>${a.lat.toFixed(3)}, ${a.lon.toFixed(3)} · zoom ≤${a.z} · ${a.n} tiles · ${new Date(a.d).toLocaleDateString()}</small></span><span class="chev">›</span></a>`).join('')}</div>` : ''}
-      <p class="small muted">Contour lines are calculated on your phone from terrain data — choose “Terrain” above and download the area to use contours and elevation offline. Roads & trails: USGS National Transportation Dataset (U.S. Census TIGER, U.S. Forest Service, NPS). Springs, falls, lakes & peaks: USGS GNIS. Map tiles: USGS The National Map (public domain). OpenStreetMap tiles are shown only while online / as you view them (© OpenStreetMap contributors). Built‑in map: Natural Earth, U.S. Census.</p>`);
+      <p class="small muted">Contour lines are calculated on your phone from terrain data — choose “Terrain” above and download the area to use contours and elevation offline. Roads & trails: USGS National Transportation Dataset (U.S. Census TIGER, U.S. Forest Service, NPS); Canada: © OpenStreetMap contributors (ODbL) via Overture Maps. Traffic signals: OpenStreetMap. Canadian addresses: Statistics Canada Open Database of Addresses (OGL‑Canada). Springs, falls, lakes & peaks: USGS GNIS. Map tiles: USGS The National Map (public domain). OpenStreetMap tiles are shown only while online / as you view them (© OpenStreetMap contributors). Built‑in map: Natural Earth, U.S. Census.</p>`);
     $('#lyr').onchange = () => { tilesOn = $('#lyr').value; store.set('maptiles', tilesOn); dirty = true; };
     $('#grd').onchange = () => { store.set('mapgrid', $('#grd').checked); dirty = true; };
     const est = () => { const [x0, y0, x1, y1] = viewBox(); let n = 0; for (let z = Math.max(1, Math.floor(S.z) - 4); z <= +$('#dlz').value; z++) { const k = Math.pow(2, z); n += (Math.floor(x1 * k) - Math.floor(x0 * k) + 1) * (Math.floor(y1 * k) - Math.floor(y0 * k) + 1); } $('#dlEst').textContent = `≈ ${n.toLocaleString()} tiles, ~${Math.round(n * 0.025)} MB. ${n > 6000 ? '⚠️ Too many — zoom in first.' : ''}`; };
@@ -1683,13 +1695,15 @@
     document.querySelectorAll('[data-pget]').forEach(b => b.onclick = async () => {
       const code = b.dataset.pget; if (!navigator.onLine) return toast('Connect to the internet to download');
       b.disabled = true; $('#packProg').textContent = 'Downloading ' + code + ' roads…';
-      try { const r = await fetch(packURL(code), { cache: 'reload' }); if (!r.ok) throw 0; const c = await caches.open(PACK_CACHE); await c.put(packURL(code), r); LOCALHAVE[code] = true; loadingSet.delete('L' + code); if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); toast('Saved local roads for ' + code); dirty = true; showLayers(); }
+      try { const c = await caches.open(PACK_CACHE);
+        if (CA_PROV.has(code)) { const rb = await fetch(seURL(code), { cache: 'reload' }); if (!rb.ok) throw 0; await c.put(seURL(code), rb); loadingSet.delete(code); }
+        const r = await fetch(packURL(code), { cache: 'reload' }); if (!r.ok) throw 0; await c.put(packURL(code), r); LOCALHAVE[code] = true; loadingSet.delete('L' + code); if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); toast('Saved local roads for ' + code); dirty = true; showLayers(); }
       catch (e) { b.disabled = false; $('#packProg').textContent = 'Download failed — try again with a better connection.'; }
     });
     document.querySelectorAll('[data-aget]').forEach(b => b.onclick = async () => { b.disabled = true; $('#packProg').textContent = 'Downloading ' + b.dataset.aget + ' addresses…'; if (await addrDownload(b.dataset.aget)) { toast('Saved addresses for ' + b.dataset.aget); showLayers(); } else { b.disabled = false; $('#packProg').textContent = 'Download failed — try again with a better connection.'; } });
     document.querySelectorAll('[data-adel]').forEach(b => b.onclick = async () => { const code = b.dataset.adel; if (!confirm('Delete saved addresses for ' + code + '?')) return; const c = await caches.open(PACK_CACHE); await c.delete(addrURL(code)); ADDRHAVE[code] = false; delete ADDR[code]; showLayers(); });
     if (!ADDRIDX) addrInit().then(() => { if ($('#packList')) showLayers(); });
-    document.querySelectorAll('[data-pdel]').forEach(b => b.onclick = async () => { const code = b.dataset.pdel; if (!confirm('Delete saved local roads for ' + code + '?')) return; const c = await caches.open(PACK_CACHE); await c.delete(packURL(code)); LOCALHAVE[code] = false; delete LOCAL[code]; loadingSet.delete('L' + code); dirty = true; showLayers(); });
+    document.querySelectorAll('[data-pdel]').forEach(b => b.onclick = async () => { const code = b.dataset.pdel; if (!confirm('Delete saved local roads for ' + code + '?')) return; const c = await caches.open(PACK_CACHE); await c.delete(packURL(code)); if (CA_PROV.has(code)) { await c.delete(seURL(code)); delete SEDATA[code]; } LOCALHAVE[code] = false; delete LOCAL[code]; loadingSet.delete('L' + code); dirty = true; showLayers(); });
     if (!SEIDX) setTimeout(() => { if (SEIDX && $('#packList')) showLayers(); }, 1500);
     $('#dlClear').onclick = async () => { if (!confirm('Delete all saved map tiles?')) return; await caches.delete(TILE_CACHE); store.set('savedAreas', []); toast('Deleted'); showLayers(); };
     document.querySelectorAll('[data-sa]').forEach(a => a.onclick = e => { e.preventDefault(); const s = saved[+a.dataset.sa]; S.lat = s.lat; S.lon = s.lon; S.z = s.zoom; tilesOn = s.src; store.set('maptiles', tilesOn); follow = false; dirty = true; closeSheet(); });
@@ -1700,9 +1714,13 @@
   let ADDRIDX = null; const ADDR = {}, ADDRHAVE = {};
   const ABBR = { street: 'st', road: 'rd', avenue: 'ave', av: 'ave', drive: 'dr', lane: 'ln', court: 'ct', boulevard: 'blvd', highway: 'hwy', parkway: 'pkwy', circle: 'cir', place: 'pl', terrace: 'ter', trail: 'trl', north: 'n', south: 's', east: 'e', west: 'w', northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw', mount: 'mt', saint: 'st', fort: 'ft', point: 'pt', square: 'sq', expressway: 'expy', freeway: 'fwy', turnpike: 'tpke', alley: 'aly', crossing: 'xing', route: 'rte', county: 'co', extension: 'ext', heights: 'hts', junction: 'jct', center: 'ctr', creek: 'crk', ridge: 'rdg', valley: 'vly', estates: 'est', loop: 'loop', pike: 'pike', row: 'row', run: 'run' };
   const SUFFIX = new Set(['st', 'rd', 'ave', 'dr', 'ln', 'ct', 'blvd', 'hwy', 'pkwy', 'cir', 'pl', 'ter', 'trl', 'way', 'sq', 'expy', 'fwy', 'tpke', 'aly', 'xing', 'loop', 'pike', 'row', 'run']);
-  const normSt = t => String(t).toLowerCase().replace(/[.,#'’]/g, ' ').split(/\s+/).filter(Boolean).map(w => ABBR[w] || w).join(' ');
-  const baseKey = k => { const w = k.split(' '); return w.length > 1 && SUFFIX.has(w[w.length - 1]) ? w.slice(0, -1).join(' ') : k; };
-  const STNAME = { AL: 'alabama', AR: 'arkansas', FL: 'florida', GA: 'georgia', KY: 'kentucky', LA: 'louisiana', MS: 'mississippi', NC: 'north carolina', SC: 'south carolina', TN: 'tennessee', VA: 'virginia', WV: 'west virginia', PA: 'pennsylvania', NJ: 'new jersey', NY: 'new york', CT: 'connecticut', RI: 'rhode island', MA: 'massachusetts', VT: 'vermont', NH: 'new hampshire', ME: 'maine', MD: 'maryland', DE: 'delaware', DC: 'district of columbia' };
+  const FR = { route: 'rte', chemin: 'ch', boulevard: 'blvd', boul: 'blvd', bd: 'blvd', montee: 'mtee', avenue: 'ave', av: 'ave', place: 'pl', impasse: 'imp', croissant: 'crois', promenade: 'prom', autoroute: 'aut', sainte: 'ste', saint: 'st' };
+  const normSt = t => String(t).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.,#'’-]/g, ' ').split(/\s+/).filter(Boolean).map(w => ABBR[w] || FR[w] || w).join(' ');
+  const FR_PRE = new Set(['rue', 'ch', 'rte', 'blvd', 'ave', 'mtee', 'rang', 'pl', 'imp', 'crois', 'prom', 'aut']), FR_ART = new Set(['de', 'du', 'des', 'la', 'le', 'l', 'd']);
+  const baseKey = k => { let w = k.split(' '); if (w.length > 1 && SUFFIX.has(w[w.length - 1])) return w.slice(0, -1).join(' ');
+    if (w.length > 1 && FR_PRE.has(w[0])) { w = w.slice(1); while (w.length > 1 && FR_ART.has(w[0])) w = w.slice(1); return w.join(' '); } // "rue Saint-Denis" → "st denis"
+    return k; };
+  const STNAME = { AL: 'alabama', AR: 'arkansas', FL: 'florida', GA: 'georgia', KY: 'kentucky', LA: 'louisiana', MS: 'mississippi', NC: 'north carolina', SC: 'south carolina', TN: 'tennessee', VA: 'virginia', WV: 'west virginia', PA: 'pennsylvania', NJ: 'new jersey', NY: 'new york', CT: 'connecticut', RI: 'rhode island', MA: 'massachusetts', VT: 'vermont', NH: 'new hampshire', ME: 'maine', MD: 'maryland', DE: 'delaware', DC: 'district of columbia', ON: 'ontario', QC: 'quebec', NB: 'new brunswick', NS: 'nova scotia', PE: 'prince edward island', NL: 'newfoundland' };
   async function addrInit() {
     if (ADDRIDX) return ADDRIDX;
     try { ADDRIDX = await loadJSON('data/addr/index.json'); } catch (e) { ADDRIDX = {}; }
@@ -1735,7 +1753,7 @@
     const have = Object.keys(ADDRHAVE).filter(k => ADDRHAVE[k]); if (!have.length) return { none: true };
     let s = q.trim().replace(/\b(apt|apartment|unit|suite|ste|lot|#)\s*\w+/gi, ' ');
     const m = s.match(/^(\d{1,6})[a-z]?\s+(.+)$/i), N = m ? +m[1] : null, rest = (m ? m[2] : s).toLowerCase();
-    const toks = rest.split(/[\s,]+/).filter(Boolean), zip = toks.find(t => /^\d{5}$/.test(t));
+    const toks = rest.split(/[\s,]+/).filter(Boolean), pc = toks.find(t => /^\d{5}$/.test(t) || /^[a-z]\d[a-z](\d[a-z]\d)?$/.test(t)), zip = pc && (/^\d/.test(pc) ? pc : pc.slice(0, 3).toUpperCase()), pc2 = toks.find(t => /^\d[a-z]\d$/.test(t));
     let states = have.filter(c => toks.includes(c.toLowerCase()) || rest.includes(STNAME[c]));
     if (!states.length) states = have;
     const out = [];
@@ -1744,7 +1762,7 @@
       for (let j = toks.length; j >= 1; j--) {
         const key = normSt(toks.slice(0, j).join(' ')); if (!key) continue;
         const ids = (d.byKey.get(key) || []).concat(d.byBase.get(key) || []); if (!ids.length) continue;
-        const cityWords = toks.slice(j).filter(t => t !== zip && t !== code.toLowerCase() && !STNAME[code].split(' ').includes(t)).join(' ');
+        const cityWords = toks.slice(j).filter(t => t !== pc && t !== pc2 && t !== code.toLowerCase() && !STNAME[code].split(' ').includes(t)).join(' ');
         for (const i of ids) {
           const [name, ci, z, flat] = d.streets[i], city = ci >= 0 ? d.cities[ci][0] : '';
           let score = 0; if (zip) { if (z === zip) score += 5; else continue; }
