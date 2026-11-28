@@ -1,9 +1,10 @@
 """Fetch traffic signals (OpenStreetMap highway=traffic_signals, via Overture Maps base/infrastructure)
 inside the map's coverage box. Writes "lon,lat" lines.
-Usage: python3 tools/fetch-signals.py <out.csv> [release]   (needs pyarrow)"""
+Usage: python3 tools/fetch-signals.py <out.csv> [release] [W,S,E,N]   (needs pyarrow)"""
 import sys, pyarrow.fs as pfs, pyarrow.dataset as ds, pyarrow.compute as pc
 OUT = sys.argv[1]; REL = sys.argv[2] if len(sys.argv) > 2 else '2026-11-18.0'
 W, E, S, N = -95.2, -66.5, 23.8, 47.8
+if len(sys.argv) > 3: W, S, E, N = map(float, sys.argv[3].split(','))  # e.g. eastern Canada: -95.2,41.6,-52.5,62.7
 fs = pfs.S3FileSystem(anonymous=True, region='us-west-2')
 d = ds.dataset(f'overturemaps-us-west-2/release/{REL}/theme=base/type=infrastructure/', filesystem=fs, format='parquet')
 f = (pc.field('bbox', 'xmin') >= W) & (pc.field('bbox', 'xmax') <= E) & (pc.field('bbox', 'ymin') >= S) & (pc.field('bbox', 'ymax') <= N) & (pc.field('class') == 'traffic_signals')
