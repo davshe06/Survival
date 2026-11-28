@@ -891,7 +891,8 @@
   }
   function trackPlayer() {
     if (!trackEl) {
-      trackEl = new Audio(); trackEl.setAttribute('playsinline', ''); trackEl.preload = 'auto';
+      trackEl = new Audio(); trackEl.setAttribute('playsinline', ''); trackEl.preload = 'auto'; trackEl.title = 'Field Guide navigation';
+      trackEl.style.display = 'none'; document.body.appendChild(trackEl); // attached to the page, like a normal audio player
       trackEl.addEventListener('timeupdate', () => { if (TR && trackURL === TR.url) tick(); });
       trackEl.addEventListener('ended', () => alog('card audio ended'));
       trackEl.addEventListener('playing', () => { if (!trackEl._on) alog('card audio playing'); trackEl._on = true; });
